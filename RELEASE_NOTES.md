@@ -175,6 +175,44 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 2. Add renewable food systems and broader fuel/input support.
 3. Add entity rendering so combat and hunting have visible world feedback.
 
+## [2026-03-08 21:10 KST] Option 1 Architecture Cleanup
+### Goal
+- Keep the no-React path and reorganize the TypeScript and Rust code so rendering stays low-level while UI, worker orchestration, and world-generation rules have clearer boundaries.
+
+### Completed
+- Split browser-side responsibilities into `app` and `ui` modules so `src/main.ts` acts as a composition root instead of holding UI rendering, persistence, targeting, and cache logic directly.
+- Moved worker simulation state and gameplay use cases into `GameSession`, leaving `game.worker.ts` as a thin message adapter.
+- Refactored Rust world generation into `world/terrain.rs` and `world/foliage.rs` behind `world/mod.rs` so terrain filling and tree placement are isolated implementation modules.
+
+### Changed Files
+- `src/main.ts`
+- `src/app/block-cache.ts`
+- `src/app/persistence.ts`
+- `src/app/targeting.ts`
+- `src/ui/game-ui.ts`
+- `src/worker/game.worker.ts`
+- `src/worker/game-session.ts`
+- `crates/mc-core/src/world/mod.rs`
+- `crates/mc-core/src/world/terrain.rs`
+- `crates/mc-core/src/world/foliage.rs`
+
+### Verification
+- Command: `npm run build`
+- Result: passed
+- Command: `cargo test`
+- Result: passed (6 tests)
+- Command: `npm run wasm`
+- Result: passed
+
+### Risks / Known Issues
+- Architecture boundaries are cleaner, but the renderer and gameplay loop are still coupled through `src/main.ts`; further splitting into engine-specific modules is still possible if the code grows.
+- The old `crates/mc-core/src/world.rs` path was replaced by a module directory, so any external references to that exact path would need updating.
+
+### Next Actions
+1. Extract chunk streaming and worker connection management from `src/main.ts` into dedicated engine/application modules.
+2. Add lightweight unit tests for the new TypeScript pure helpers (`block-cache`, targeting, inventory UI mapping).
+3. Reduce the remaining worker protocol surface by removing legacy `SET_BLOCK` and `COLLECT_ITEM` paths if they are no longer needed.
+
 ## Entry Template (copy for each session)
 
 ```md

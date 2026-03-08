@@ -1,39 +1,40 @@
-import {
-  BLOCK_TYPE,
-  getEdibleHunger,
-  isEdibleItem,
-  RECIPES,
-  type RecipeId,
-} from "./gameplay/items";
 import { HotbarManager } from "./hotbar";
 import { PlayerPhysics } from "./physics";
-import { raycast } from "./raycast";
+import { loadState, saveState } from "./app/persistence";
+import {
+  findBlockTarget,
+  findEntityTarget,
+  pickNearestTarget,
+  wouldOverlapPlayer,
+} from "./app/targeting";
+import { BlockCache } from "./app/block-cache";
 import { initGpu } from "./renderer/gpu";
 import { HighlightRenderer } from "./renderer/highlight";
 import { InputManager } from "./renderer/input";
 import { createPipeline, UNIFORM_BUFFER_SIZE } from "./renderer/pipeline";
 import { Camera } from "./renderer/camera";
 import { Scene } from "./renderer/scene";
-import type { TargetHit, EntityTargetHit } from "./target";
+import type { TargetHit } from "./target";
+import { GameUi, preferredFuel } from "./ui/game-ui";
 import type {
   EntitySnapshot,
   FrameDiagnostics,
   InventoryEntry,
   MainToWorker,
   PlayerStats,
-  SavedState,
   SmeltingState,
   WorkerToMain,
 } from "./worker/protocol";
 
 const RENDER_RADIUS = 4;
 const CHUNK_SIZE = 16;
-const CHUNK_HEIGHT = 64;
 const EYE_HEIGHT = 1.62;
 const MAX_INTERACT_DIST = 5;
 const FOG_NEAR = 40;
 const FOG_FAR = 80;
-const SKY_R = 0.53, SKY_G = 0.81, SKY_B = 0.98;
+const SKY_R = 0.53;
+const SKY_G = 0.81;
+const SKY_B = 0.98;
 const LIGHT_DIR: [number, number, number] = [0.6, 1.0, 0.4];
 const AMBIENT = 0.25;
 const SAVE_KEY = "open-block/save-v1";
@@ -52,50 +53,13 @@ const recipeListEl = document.getElementById("recipe-list") as HTMLElement;
 const furnacePanelEl = document.getElementById("furnace-panel") as HTMLElement;
 const actionListEl = document.getElementById("action-list") as HTMLElement;
 
-const targetEl = ensureHudLine("target", "Target: none");
-const fpsEl = ensureHudLine("fps", "FPS: 0");
-const statsEl = ensureHudLine("stats", "HP: 20 | Hunger: 20 | Day");
-const invEl = ensureHudLine("inventory", "Inventory: -");
-const diagEl = ensureHudLine("diag", "FrameErr(main/worker): 0/0");
-
-function setStatus(msg: string) {
-  statusEl.textContent = msg;
-}
-
-const blockCache = new Map<string, Uint8Array>();
-
-function chunkKey(cx: number, cz: number): string {
-  return `${cx},${cz}`;
-}
-
-function getBlockTypeAt(wx: number, wy: number, wz: number): number {
-  if (wy < 0 || wy >= CHUNK_HEIGHT) return BLOCK_TYPE.air;
-  const bx = Math.floor(wx);
-  const by = Math.floor(wy);
-  const bz = Math.floor(wz);
-  const cx = Math.floor(bx / CHUNK_SIZE);
-  const cz = Math.floor(bz / CHUNK_SIZE);
-  const data = blockCache.get(chunkKey(cx, cz));
-  if (!data) return BLOCK_TYPE.air;
-  const lx = ((bx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-  const lz = ((bz % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-  const idx = by * CHUNK_SIZE * CHUNK_SIZE + lz * CHUNK_SIZE + lx;
-  return data[idx] ?? BLOCK_TYPE.air;
-}
-
-function isSolid(wx: number, wy: number, wz: number): boolean {
-  if (wy < 0) return true;
-  const block = getBlockTypeAt(wx, wy, wz);
-  return block !== BLOCK_TYPE.air && block !== BLOCK_TYPE.water;
-}
-
 let depthTexture: GPUTexture | null = null;
 
-function ensureDepthTexture(device: GPUDevice, w: number, h: number): GPUTexture {
-  if (!depthTexture || depthTexture.width !== w || depthTexture.height !== h) {
+function ensureDepthTexture(device: GPUDevice, width: number, height: number): GPUTexture {
+  if (!depthTexture || depthTexture.width !== width || depthTexture.height !== height) {
     depthTexture?.destroy();
     depthTexture = device.createTexture({
-      size: [w, h],
+      size: [width, height],
       format: "depth24plus",
       usage: GPUTextureUsage.RENDER_ATTACHMENT,
     });
@@ -104,7 +68,23 @@ function ensureDepthTexture(device: GPUDevice, w: number, h: number): GPUTexture
 }
 
 async function main() {
-  setStatus("Initializing WebGPU...");
+  const ui = new GameUi({
+    overlay,
+    status: statusEl,
+    crosshair,
+    hud: hudEl,
+    hotbar: hotbarEl,
+    inventoryPanel: inventoryPanelEl,
+    inventoryGrid: inventoryGridEl,
+    recipeList: recipeListEl,
+    furnacePanel: furnacePanelEl,
+    actionList: actionListEl,
+    pos: posEl,
+    chunks: chunksEl,
+  });
+
+  ui.setStatus("Initializing WebGPU...");
+
   const gpu = await initGpu(canvas);
   const { device, context, format } = gpu;
 
@@ -115,6 +95,7 @@ async function main() {
   const highlight = new HighlightRenderer(device, format);
   const physics = new PlayerPhysics();
   const hotbar = new HotbarManager();
+  const blockCache = new BlockCache();
 
   const requestedChunks = new Set<string>();
   const queuedChunkRequests = new Set<string>();
@@ -123,13 +104,14 @@ async function main() {
   let worker: Worker | null = null;
   let workerReady = false;
   let restartAttempts = 0;
+  let inventoryOpen = false;
 
   let entitySnapshots: EntitySnapshot[] = [];
   let playerStats: PlayerStats | null = null;
   let inventoryEntries: InventoryEntry[] = [];
   let smeltingState: SmeltingState | null = null;
   let workerDiagnostics: FrameDiagnostics = { frameErrorCount: 0, lastErrorCode: null };
-  let inventoryOpen = false;
+  let targetHit: TargetHit = null;
 
   const mainDiagnostics = {
     frameErrorCount: 0,
@@ -149,6 +131,25 @@ async function main() {
   camera.position[1] = playerFeet[1] + EYE_HEIGHT;
   camera.position[2] = playerFeet[2];
 
+  function chunkKey(cx: number, cz: number): string {
+    return `${cx},${cz}`;
+  }
+
+  function syncChromeVisibility() {
+    ui.syncVisibility({ locked: input.locked, inventoryOpen });
+  }
+
+  function setInventoryOpen(nextOpen: boolean) {
+    inventoryOpen = nextOpen;
+    if (nextOpen && document.pointerLockElement === canvas) {
+      document.exitPointerLock();
+    }
+    if (!nextOpen) {
+      ui.setOverlayTitle(workerReady ? "Paused" : "Open Block");
+    }
+    syncChromeVisibility();
+  }
+
   function resizeCanvas() {
     const dpr = window.devicePixelRatio || 1;
     canvas.width = Math.floor(window.innerWidth * dpr);
@@ -163,61 +164,75 @@ async function main() {
     worker?.postMessage(msg);
   };
 
-  const syncChromeVisibility = () => {
-    const paused = !input.locked && !inventoryOpen;
-    overlay.classList.toggle("hidden", !paused);
-    inventoryPanelEl.classList.toggle("visible", inventoryOpen);
-    inventoryPanelEl.setAttribute("aria-hidden", inventoryOpen ? "false" : "true");
-    crosshair.style.display = input.locked ? "block" : "none";
-    hudEl.style.display = paused ? "none" : "block";
-    hotbarEl.style.display = input.locked ? "flex" : "none";
-  };
+  function evictDistantChunkState(centerChunkX: number, centerChunkZ: number) {
+    scene.evictDistant(centerChunkX, centerChunkZ, RENDER_RADIUS + 2);
+    blockCache.evictDistant(centerChunkX, centerChunkZ, RENDER_RADIUS + 2, (cx, cz) => {
+      requestedChunks.delete(chunkKey(cx, cz));
+    });
 
-  const setInventoryOpen = (nextOpen: boolean) => {
-    inventoryOpen = nextOpen;
-    if (nextOpen && document.pointerLockElement === canvas) {
-      document.exitPointerLock();
-    }
-    if (!nextOpen) {
-      overlay.querySelector("h1")!.textContent = "Paused";
-      if (!workerReady) {
-        overlay.querySelector("h1")!.textContent = "Open Block";
+    for (const key of [...requestedChunks]) {
+      const [cx, cz] = key.split(",").map(Number);
+      if (Math.abs(cx - centerChunkX) > RENDER_RADIUS + 2 || Math.abs(cz - centerChunkZ) > RENDER_RADIUS + 2) {
+        requestedChunks.delete(key);
       }
     }
-    syncChromeVisibility();
-  };
+  }
 
-  const connectWorker = () => {
+  function requestSurroundingChunks() {
+    if (!workerReady) return;
+    const cx = Math.floor(camera.position[0] / CHUNK_SIZE);
+    const cz = Math.floor(camera.position[2] / CHUNK_SIZE);
+    evictDistantChunkState(cx, cz);
+
+    for (let dz = -RENDER_RADIUS; dz <= RENDER_RADIUS; dz++) {
+      for (let dx = -RENDER_RADIUS; dx <= RENDER_RADIUS; dx++) {
+        const targetChunkX = cx + dx;
+        const targetChunkZ = cz + dz;
+        const key = chunkKey(targetChunkX, targetChunkZ);
+        if (requestedChunks.has(key) || queuedChunkRequests.has(key)) continue;
+        queuedChunkRequests.add(key);
+        chunkRequestQueue.push({ cx: targetChunkX, cz: targetChunkZ });
+      }
+    }
+  }
+
+  function flushChunkQueue(maxPerFrame: number) {
+    if (!workerReady) return;
+    let sent = 0;
+    while (chunkRequestQueue.length > 0 && sent < maxPerFrame) {
+      const next = chunkRequestQueue.shift();
+      if (!next) break;
+      const key = chunkKey(next.cx, next.cz);
+      queuedChunkRequests.delete(key);
+      if (requestedChunks.has(key)) continue;
+      requestedChunks.add(key);
+      postToWorker({ type: "GENERATE_CHUNK", chunkX: next.cx, chunkZ: next.cz });
+      sent += 1;
+    }
+  }
+
+  function connectWorker() {
     worker?.terminate();
     workerReady = false;
 
-    worker = new Worker(new URL("./worker/game.worker.ts", import.meta.url), {
-      type: "module",
-    });
-
-    worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
-      const msg = e.data;
+    worker = new Worker(new URL("./worker/game.worker.ts", import.meta.url), { type: "module" });
+    worker.onmessage = (event: MessageEvent<WorkerToMain>) => {
+      const msg = event.data;
       switch (msg.type) {
         case "READY": {
           workerReady = true;
           restartAttempts = 0;
-          setStatus("Ready — click to start");
-          overlay.classList.remove("hidden");
-          const loaded = loadSavedState();
-          if (loaded) {
-            postToWorker({ type: "LOAD_STATE", state: loaded });
-          }
+          ui.setStatus("Ready — click to start");
+          const saved = loadState(SAVE_KEY);
+          if (saved) postToWorker({ type: "LOAD_STATE", state: saved });
           break;
         }
 
-        case "CHUNK_MESH": {
+        case "CHUNK_MESH":
           scene.uploadChunk(msg.chunkX, msg.chunkZ, msg.buffer, msg.vertexCount);
           scene.storeBlockData(msg.chunkX, msg.chunkZ, msg.blockData);
-          if (msg.blockData.byteLength > 0) {
-            blockCache.set(chunkKey(msg.chunkX, msg.chunkZ), new Uint8Array(msg.blockData));
-          }
+          blockCache.storeChunk(msg.chunkX, msg.chunkZ, msg.blockData);
           break;
-        }
 
         case "ENTITY_SNAPSHOT":
           entitySnapshots = msg.entities;
@@ -238,7 +253,7 @@ async function main() {
           break;
 
         case "STATE_SNAPSHOT":
-          saveState(msg.state);
+          saveState(SAVE_KEY, msg.state);
           break;
 
         case "ERROR":
@@ -254,191 +269,111 @@ async function main() {
     };
 
     postToWorker({ type: "INIT", seed: 42 });
-  };
+  }
 
-  const scheduleWorkerRestart = () => {
+  function scheduleWorkerRestart() {
     restartAttempts += 1;
     const delay = Math.min(4000, 500 * restartAttempts);
-    setStatus(`Worker restarting in ${Math.round(delay / 1000)}s...`);
-    window.setTimeout(() => {
-      connectWorker();
-    }, delay);
-  };
+    ui.setStatus(`Worker restarting in ${Math.round(delay / 1000)}s...`);
+    window.setTimeout(connectWorker, delay);
+  }
 
-  connectWorker();
-  syncChromeVisibility();
-
-  window.setInterval(() => {
-    if (workerReady) postToWorker({ type: "REQUEST_STATE" });
-  }, 5000);
-
-  window.addEventListener("beforeunload", () => {
-    if (workerReady) postToWorker({ type: "REQUEST_STATE" });
-  });
-
-  document.addEventListener("pointerlockchange", () => {
-    if (document.pointerLockElement === canvas) {
-      inventoryOpen = false;
-      overlay.classList.add("hidden");
-    } else if (!inventoryOpen) {
-      overlay.classList.remove("hidden");
-      overlay.querySelector("h1")!.textContent = "Paused";
-      setStatus("Click to resume");
-    }
-    syncChromeVisibility();
-  });
-
-  let targetHit: TargetHit = null;
-
-  canvas.addEventListener("mousedown", (e) => {
-    if (!input.locked) return;
-    if (e.button === 0) {
-      handlePrimaryInteraction(targetHit);
-    } else if (e.button === 2) {
-      handleSecondaryInteraction(targetHit);
-    }
-  });
-
-  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
-
-  document.addEventListener("keydown", (e) => {
-    if (e.code === "KeyE" && workerReady) {
-      e.preventDefault();
-      setInventoryOpen(!inventoryOpen);
-    }
-  });
-
-  recipeListEl.addEventListener("click", (event) => {
-    const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-recipe-id]");
-    if (!button || !workerReady) return;
-    const recipeId = button.dataset.recipeId as RecipeId | undefined;
-    if (!recipeId) return;
+  ui.bindRecipeSelect((recipeId) => {
+    if (!workerReady) return;
     postToWorker({ type: "CRAFT", recipeId, quantity: 1 });
   });
 
-  furnacePanelEl.addEventListener("click", (event) => {
-    const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-furnace-action]");
-    if (!button || !workerReady) return;
-    const action = button.dataset.furnaceAction;
+  ui.bindFurnaceAction((action) => {
+    if (!workerReady) return;
     if (action === "start") {
       const fuelItem = preferredFuel(inventoryEntries);
       if (!fuelItem) return;
       postToWorker({ type: "SMELT_START", inputItem: "raw_meat", fuelItem });
       return;
     }
-    if (action === "collect") {
-      postToWorker({ type: "SMELT_COLLECT" });
+    postToWorker({ type: "SMELT_COLLECT" });
+  });
+
+  ui.bindAction((action) => {
+    if (!workerReady) return;
+    if (action.type === "consume") {
+      postToWorker({ type: "CONSUME_ITEM", itemId: action.itemId });
+      return;
+    }
+    postToWorker({ type: "SLEEP" });
+  });
+
+  canvas.addEventListener("mousedown", (event) => {
+    if (!input.locked || !workerReady || !targetHit) return;
+    if (event.button === 0) {
+      if (targetHit.kind === "entity") {
+        postToWorker({ type: "INTERACT_ENTITY", entityId: targetHit.entity.id, action: "attack" });
+        return;
+      }
+      postToWorker({
+        type: "BREAK_BLOCK",
+        worldX: targetHit.hit.worldX,
+        worldY: targetHit.hit.worldY,
+        worldZ: targetHit.hit.worldZ,
+      });
+      return;
+    }
+
+    if (event.button === 2) {
+      if (targetHit.kind === "entity") {
+        postToWorker({ type: "INTERACT_ENTITY", entityId: targetHit.entity.id, action: "interact" });
+        return;
+      }
+
+      const selectedItemId = hotbar.selectedItemId;
+      if (!selectedItemId || hotbar.getSelectedCount() <= 0) return;
+
+      const px = targetHit.hit.worldX + targetHit.hit.faceNormal[0];
+      const py = targetHit.hit.worldY + targetHit.hit.faceNormal[1];
+      const pz = targetHit.hit.worldZ + targetHit.hit.faceNormal[2];
+      if (wouldOverlapPlayer(px, py, pz, playerFeet)) return;
+
+      postToWorker({ type: "PLACE_ITEM", worldX: px, worldY: py, worldZ: pz, itemId: selectedItemId });
     }
   });
 
-  actionListEl.addEventListener("click", (event) => {
-    const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button");
-    if (!button || !workerReady) return;
-    const consumeItem = button.dataset.consumeItem as InventoryEntry["itemId"] | undefined;
-    if (consumeItem) {
-      postToWorker({ type: "CONSUME_ITEM", itemId: consumeItem });
-      return;
-    }
-    if (button.dataset.action === "sleep") {
-      postToWorker({ type: "SLEEP" });
+  canvas.addEventListener("contextmenu", (event) => event.preventDefault());
+
+  document.addEventListener("keydown", (event) => {
+    if (event.code === "KeyE" && workerReady) {
+      event.preventDefault();
+      setInventoryOpen(!inventoryOpen);
     }
   });
 
-  function handlePrimaryInteraction(target: TargetHit) {
-    if (!target || !workerReady) return;
-
-    if (target.kind === "entity") {
-      postToWorker({ type: "INTERACT_ENTITY", entityId: target.entity.id, action: "attack" });
-      return;
+  document.addEventListener("pointerlockchange", () => {
+    if (document.pointerLockElement === canvas) {
+      inventoryOpen = false;
+      ui.setOverlayTitle("Open Block");
+    } else if (!inventoryOpen) {
+      ui.setOverlayTitle("Paused");
+      ui.setStatus("Click to resume");
     }
+    syncChromeVisibility();
+  });
 
-    const { worldX, worldY, worldZ } = target.hit;
-    postToWorker({ type: "BREAK_BLOCK", worldX, worldY, worldZ });
-  }
-
-  function handleSecondaryInteraction(target: TargetHit) {
-    if (!target || !workerReady) return;
-
-    if (target.kind === "entity") {
-      postToWorker({ type: "INTERACT_ENTITY", entityId: target.entity.id, action: "interact" });
-      return;
-    }
-
-    const px = target.hit.worldX + target.hit.faceNormal[0];
-    const py = target.hit.worldY + target.hit.faceNormal[1];
-    const pz = target.hit.worldZ + target.hit.faceNormal[2];
-    const selectedItemId = hotbar.selectedItemId;
-
-    if (!selectedItemId || hotbar.getSelectedCount() <= 0) return;
-    if (wouldOverlapPlayer(px, py, pz, playerFeet)) return;
-
-    postToWorker({
-      type: "PLACE_ITEM",
-      worldX: px,
-      worldY: py,
-      worldZ: pz,
-      itemId: selectedItemId,
-    });
-  }
-
-  function requestSurroundingChunks() {
-    if (!workerReady) return;
-    const cx = Math.floor(camera.position[0] / CHUNK_SIZE);
-    const cz = Math.floor(camera.position[2] / CHUNK_SIZE);
-
-    scene.evictDistant(cx, cz, RENDER_RADIUS + 2);
-
-    for (const k of blockCache.keys()) {
-      const [kx, kz] = k.split(",").map(Number);
-      if (Math.abs(kx - cx) > RENDER_RADIUS + 2 || Math.abs(kz - cz) > RENDER_RADIUS + 2) {
-        blockCache.delete(k);
-        requestedChunks.delete(k);
-      }
-    }
-
-    for (const k of [...requestedChunks]) {
-      const [kx, kz] = k.split(",").map(Number);
-      if (Math.abs(kx - cx) > RENDER_RADIUS + 2 || Math.abs(kz - cz) > RENDER_RADIUS + 2) {
-        requestedChunks.delete(k);
-      }
-    }
-
-    for (let dz = -RENDER_RADIUS; dz <= RENDER_RADIUS; dz++) {
-      for (let dx = -RENDER_RADIUS; dx <= RENDER_RADIUS; dx++) {
-        const tx = cx + dx;
-        const tz = cz + dz;
-        const key = chunkKey(tx, tz);
-        if (requestedChunks.has(key) || queuedChunkRequests.has(key)) continue;
-        queuedChunkRequests.add(key);
-        chunkRequestQueue.push({ cx: tx, cz: tz });
-      }
-    }
-  }
-
-  function flushChunkQueue(maxPerFrame: number) {
-    if (!workerReady) return;
-    let sent = 0;
-    while (chunkRequestQueue.length > 0 && sent < maxPerFrame) {
-      const next = chunkRequestQueue.shift();
-      if (!next) break;
-      const key = chunkKey(next.cx, next.cz);
-      queuedChunkRequests.delete(key);
-      if (requestedChunks.has(key)) continue;
-      requestedChunks.add(key);
-      postToWorker({ type: "GENERATE_CHUNK", chunkX: next.cx, chunkZ: next.cz });
-      sent += 1;
-    }
-  }
-
+  connectWorker();
+  syncChromeVisibility();
   requestSurroundingChunks();
   window.setInterval(requestSurroundingChunks, 1000);
+  window.setInterval(() => {
+    if (workerReady) postToWorker({ type: "REQUEST_STATE" });
+  }, 5000);
+  window.addEventListener("beforeunload", () => {
+    if (workerReady) postToWorker({ type: "REQUEST_STATE" });
+  });
 
   const uniformData = new Float32Array(UNIFORM_BUFFER_SIZE / 4);
   const lightNorm = normalise3(LIGHT_DIR);
 
   function uploadUniforms() {
-    const vp = camera.getViewProj();
-    uniformData.set(vp, 0);
+    const viewProj = camera.getViewProj();
+    uniformData.set(viewProj, 0);
     uniformData.set(camera.position, 16);
     uniformData[19] = 0;
     uniformData.set(lightNorm, 20);
@@ -450,7 +385,7 @@ async function main() {
     uniformData[28] = SKY_B;
     uniformData[29] = 0;
     device.queue.writeBuffer(pipeline.uniformBuffer, 0, uniformData);
-    return vp;
+    return viewProj;
   }
 
   let lastTime = performance.now();
@@ -468,12 +403,9 @@ async function main() {
       if (input.locked) {
         const { dx, dy } = input.consumeDelta();
         camera.yaw += dx;
-        camera.pitch = Math.max(
-          -Math.PI / 2 + 0.01,
-          Math.min(Math.PI / 2 - 0.01, camera.pitch - dy),
-        );
+        camera.pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, camera.pitch - dy));
 
-        physics.tick(playerFeet, camera.yaw, input.keys, dt, isSolid);
+        physics.tick(playerFeet, camera.yaw, input.keys, dt, blockCache.isSolid.bind(blockCache));
         camera.position[0] = playerFeet[0];
         camera.position[1] = playerFeet[1] + EYE_HEIGHT;
         camera.position[2] = playerFeet[2];
@@ -481,7 +413,12 @@ async function main() {
         requestSurroundingChunks();
         flushChunkQueue(5);
 
-        const blockTarget = findBlockTarget(camera);
+        const blockTarget = findBlockTarget(
+          camera,
+          MAX_INTERACT_DIST,
+          blockCache.isSolid.bind(blockCache),
+          blockCache.getBlockTypeAt.bind(blockCache),
+        );
         const entityTarget = findEntityTarget(camera, entitySnapshots, MAX_INTERACT_DIST);
         targetHit = pickNearestTarget(blockTarget, entityTarget);
 
@@ -513,12 +450,8 @@ async function main() {
           postToWorker({
             type: "TICK",
             dt: tickAccumulator,
-            playerPos: {
-              x: camera.position[0],
-              y: camera.position[1],
-              z: camera.position[2],
-            },
-            isSheltered: isPlayerSheltered(camera.position[0], camera.position[1], camera.position[2]),
+            playerPos: { x: camera.position[0], y: camera.position[1], z: camera.position[2] },
+            isSheltered: isPlayerSheltered(camera.position[0], camera.position[1], camera.position[2], blockCache),
           });
           tickAccumulator = 0;
         }
@@ -532,12 +465,11 @@ async function main() {
         fpsElapsed = 0;
       }
 
-      const vp = uploadUniforms();
-      highlight.updateViewProj(device, vp);
+      const viewProj = uploadUniforms();
+      highlight.updateViewProj(device, viewProj);
 
       const depth = ensureDepthTexture(device, canvas.width, canvas.height);
       const view = context.getCurrentTexture().createView();
-
       const encoder = device.createCommandEncoder();
       const pass = encoder.beginRenderPass({
         colorAttachments: [{
@@ -557,27 +489,27 @@ async function main() {
       scene.draw(pass, pipeline);
       highlight.draw(pass);
       pass.end();
-
       device.queue.submit([encoder.finish()]);
-      renderHud(
-        targetHit,
-        fpsValue,
-        playerStats,
-        inventoryEntries,
-        smeltingState,
-        mainDiagnostics,
-        workerDiagnostics,
-        hotbar.selectedItemName,
-        hotbar.getSelectedCount(),
-        scene.chunkCount,
-        camera.position,
-      );
-      renderInventoryPanel(inventoryEntries, playerStats, smeltingState);
+
+      ui.renderHud({
+        target: targetHit,
+        fps: fpsValue,
+        stats: playerStats,
+        inventory: inventoryEntries,
+        smelting: smeltingState,
+        mainDiag: mainDiagnostics,
+        workerDiag: workerDiagnostics,
+        selectedItemName: hotbar.selectedItemName,
+        selectedCount: hotbar.getSelectedCount(),
+        chunkCount: scene.chunkCount,
+        cameraPos: camera.position,
+      });
+      ui.renderInventoryPanel(inventoryEntries, playerStats, smeltingState);
     } catch (err) {
       mainDiagnostics.frameErrorCount += 1;
       mainDiagnostics.lastErrorCode = "FRAME_EXCEPTION";
       console.error("Frame loop error:", err);
-      setStatus(`Frame recovered: ${String(err)}`);
+      ui.setStatus(`Frame recovered: ${String(err)}`);
     } finally {
       requestAnimationFrame(frame);
     }
@@ -586,316 +518,8 @@ async function main() {
   requestAnimationFrame(frame);
 }
 
-function findBlockTarget(camera: Camera): TargetHit {
-  const fwd = camera.forward as [number, number, number];
-  const pos = camera.position as unknown as [number, number, number];
-
-  if (!isFiniteVector(pos[0], pos[1], pos[2]) || !isFiniteVector(fwd[0], fwd[1], fwd[2])) {
-    return null;
-  }
-
-  const hit = raycast(pos, fwd, MAX_INTERACT_DIST, isSolid);
-  if (!hit) return null;
-
-  if (!Number.isFinite(hit.distance) || hit.distance < 0 || hit.distance > MAX_INTERACT_DIST + 0.001) {
-    return null;
-  }
-
-  return {
-    kind: "block",
-    hit,
-    blockType: getBlockTypeAt(hit.worldX, hit.worldY, hit.worldZ),
-  };
-}
-
-function findEntityTarget(camera: Camera, entities: EntitySnapshot[], maxDist: number): EntityTargetHit | null {
-  const origin: [number, number, number] = [camera.position[0], camera.position[1], camera.position[2]];
-  const dir: [number, number, number] = [camera.forward[0], camera.forward[1], camera.forward[2]];
-
-  if (!isFiniteVector(origin[0], origin[1], origin[2]) || !isFiniteVector(dir[0], dir[1], dir[2])) {
-    return null;
-  }
-
-  let best: EntityTargetHit | null = null;
-
-  for (const entity of entities) {
-    const t = rayAabb(origin, dir, {
-      minX: entity.position.x - entity.radius,
-      minY: entity.position.y,
-      minZ: entity.position.z - entity.radius,
-      maxX: entity.position.x + entity.radius,
-      maxY: entity.position.y + entity.halfHeight * 2,
-      maxZ: entity.position.z + entity.radius,
-    }, maxDist);
-
-    if (t === null) continue;
-    if (!best || t < best.distance) {
-      best = { kind: "entity", entity, distance: t };
-    }
-  }
-
-  return best;
-}
-
-function pickNearestTarget(blockTarget: TargetHit, entityTarget: EntityTargetHit | null): TargetHit {
-  if (!blockTarget) return entityTarget;
-  if (!entityTarget) return blockTarget;
-
-  if (blockTarget.kind !== "block") return blockTarget;
-  return entityTarget.distance < blockTarget.hit.distance ? entityTarget : blockTarget;
-}
-
-interface Aabb {
-  minX: number;
-  minY: number;
-  minZ: number;
-  maxX: number;
-  maxY: number;
-  maxZ: number;
-}
-
-function rayAabb(origin: [number, number, number], dir: [number, number, number], aabb: Aabb, maxDist: number): number | null {
-  let tMin = 0;
-  let tMax = maxDist;
-
-  const axes: Array<[number, number, number, number]> = [
-    [origin[0], dir[0], aabb.minX, aabb.maxX],
-    [origin[1], dir[1], aabb.minY, aabb.maxY],
-    [origin[2], dir[2], aabb.minZ, aabb.maxZ],
-  ];
-
-  for (const [o, d, minB, maxB] of axes) {
-    if (Math.abs(d) < 1e-9) {
-      if (o < minB || o > maxB) return null;
-      continue;
-    }
-
-    const inv = 1 / d;
-    let t1 = (minB - o) * inv;
-    let t2 = (maxB - o) * inv;
-    if (t1 > t2) {
-      const tmp = t1;
-      t1 = t2;
-      t2 = tmp;
-    }
-
-    tMin = Math.max(tMin, t1);
-    tMax = Math.min(tMax, t2);
-
-    if (tMin > tMax) return null;
-  }
-
-  if (!Number.isFinite(tMin) || tMin < 0 || tMin > maxDist) return null;
-  return tMin;
-}
-
-function wouldOverlapPlayer(blockX: number, blockY: number, blockZ: number, feet: [number, number, number]): boolean {
-  const playerMinX = feet[0] - 0.3;
-  const playerMaxX = feet[0] + 0.3;
-  const playerMinY = feet[1];
-  const playerMaxY = feet[1] + 1.8;
-  const playerMinZ = feet[2] - 0.3;
-  const playerMaxZ = feet[2] + 0.3;
-
-  const blockMinX = blockX;
-  const blockMaxX = blockX + 1;
-  const blockMinY = blockY;
-  const blockMaxY = blockY + 1;
-  const blockMinZ = blockZ;
-  const blockMaxZ = blockZ + 1;
-
-  return (
-    playerMinX < blockMaxX &&
-    playerMaxX > blockMinX &&
-    playerMinY < blockMaxY &&
-    playerMaxY > blockMinY &&
-    playerMinZ < blockMaxZ &&
-    playerMaxZ > blockMinZ
-  );
-}
-
-function isPlayerSheltered(x: number, y: number, z: number): boolean {
-  return isSolid(x, y + 0.4, z) || isSolid(x, y + 1.0, z) || isSolid(x, y + 1.8, z);
-}
-
-function renderHud(
-  target: TargetHit,
-  fps: number,
-  stats: PlayerStats | null,
-  inventory: InventoryEntry[],
-  smelting: SmeltingState | null,
-  mainDiag: { frameErrorCount: number; lastErrorCode: string | null; lastGpuError: string | null },
-  workerDiag: FrameDiagnostics,
-  selectedItemName: string,
-  selectedCount: number,
-  chunkCount: number,
-  cameraPos: ArrayLike<number>,
-) {
-  posEl.textContent = `XYZ: ${cameraPos[0].toFixed(1)}, ${cameraPos[1].toFixed(1)}, ${cameraPos[2].toFixed(1)}`;
-  chunksEl.textContent = `Chunks: ${chunkCount}`;
-
-  const targetLabel = !target
-    ? "none"
-    : target.kind === "block"
-      ? `block (${target.hit.worldX},${target.hit.worldY},${target.hit.worldZ})`
-      : `${target.entity.kind}#${target.entity.id}`;
-  targetEl.textContent = `Target: ${targetLabel} | Held: ${selectedItemName} x${selectedCount}`;
-
-  fpsEl.textContent = `FPS: ${fps.toFixed(1)}`;
-
-  if (stats) {
-    statsEl.textContent =
-      `HP: ${stats.health.toFixed(1)}/${stats.maxHealth} | Hunger: ${stats.hunger.toFixed(1)}/${stats.maxHunger} | ` +
-      `Time: ${Math.floor(stats.timeOfDay)} (${stats.isNight ? "Night" : "Day"}) | ` +
-      `Shelter: ${stats.isSheltered ? "yes" : "no"}`;
-  } else {
-    statsEl.textContent = "HP: - | Hunger: - | Time: -";
-  }
-
-  const invPreview = inventory.slice(0, 6).map((entry) => `${entry.itemId}:${entry.count}`).join(" ") || "-";
-  const edibleAvailable = inventory.some((entry) => isEdibleItem(entry.itemId) && entry.count > 0) ? "yes" : "no";
-  const smeltReady = smelting ? Date.now() >= smelting.readyAtMs : false;
-  const smeltLabel = smelting
-    ? ` | Smelting: ${smelting.inputItem}->${smelting.outputItem} (${smeltReady ? "ready" : "running"})`
-    : "";
-  invEl.textContent = `Inventory: ${invPreview} | Food: ${edibleAvailable}${smeltLabel}`;
-
-  diagEl.textContent =
-    `FrameErr(main/worker): ${mainDiag.frameErrorCount}/${workerDiag.frameErrorCount} | ` +
-    `Last(main): ${mainDiag.lastErrorCode ?? "-"} | Last(worker): ${workerDiag.lastErrorCode ?? "-"}` +
-    (mainDiag.lastGpuError ? ` | GPU: ${mainDiag.lastGpuError}` : "");
-}
-
-function renderInventoryPanel(
-  inventory: InventoryEntry[],
-  stats: PlayerStats | null,
-  smelting: SmeltingState | null,
-) {
-  const counts = inventoryCounts(inventory);
-  const inventoryRows = inventory.length === 0
-    ? '<div class="inventory-row empty-state"><span>Inventory empty</span><span>Break a tree to start</span></div>'
-    : inventory
-        .map((entry) => {
-          const edible = isEdibleItem(entry.itemId) ? ` (+${getEdibleHunger(entry.itemId)} hunger)` : "";
-          return `<div class="inventory-row"><span>${entry.itemId.replace("_", " ")}</span><span>${entry.count}${edible}</span></div>`;
-        })
-        .join("");
-  inventoryGridEl.innerHTML = inventoryRows;
-
-  recipeListEl.innerHTML = RECIPES.map((recipe) => {
-    const canCraft = recipe.inputs
-      ? Object.entries(recipe.inputs).every(([itemId, count]) => (counts.get(itemId as InventoryEntry["itemId"]) ?? 0) >= (count ?? 0))
-      : true;
-    const hasStation = !recipe.requiresCraftingTable || (counts.get("crafting_table") ?? 0) > 0;
-    const enabled = canCraft && hasStation;
-    const inputs = Object.entries(recipe.inputs)
-      .map(([itemId, count]) => `${itemId}:${count}`)
-      .join(" ");
-    const outputs = Object.entries(recipe.outputs)
-      .map(([itemId, count]) => `${itemId}:${count}`)
-      .join(" ");
-    const requirement = recipe.requiresCraftingTable ? " | needs crafting table" : "";
-    return `
-      <div class="recipe-row ${enabled ? "" : "disabled"}">
-        <div>
-          <div>${recipe.id.replace("_", " ")}</div>
-          <div class="panel-meta">${inputs} -> ${outputs}${requirement}</div>
-        </div>
-        <button data-recipe-id="${recipe.id}" ${enabled ? "" : "disabled"}>Craft</button>
-      </div>`;
-  }).join("");
-
-  const fuel = preferredFuel(inventory);
-  const canStartSmelting = !smelting && (counts.get("furnace") ?? 0) > 0 && (counts.get("raw_meat") ?? 0) > 0 && !!fuel;
-  const smeltReady = smelting ? Date.now() >= smelting.readyAtMs : false;
-  const smeltProgress = smelting
-    ? `${Math.max(0, smelting.readyAtMs - Date.now()) <= 0 ? "Ready to collect" : `${Math.ceil(Math.max(0, smelting.readyAtMs - Date.now()) / 1000)}s remaining`}`
-    : "Idle";
-  furnacePanelEl.innerHTML = `
-    <div class="action-row ${canStartSmelting ? "" : "disabled"}">
-      <div>
-        <div>Cook raw meat</div>
-        <div class="panel-meta">Needs furnace, raw meat, and fuel (${fuel ?? "none"})</div>
-      </div>
-      <button data-furnace-action="start" ${canStartSmelting ? "" : "disabled"}>Start</button>
-    </div>
-    <div class="action-row ${smelting && smeltReady ? "" : "disabled"}">
-      <div>
-        <div>${smelting ? `${smelting.inputItem} -> ${smelting.outputItem}` : "No active smelt"}</div>
-        <div class="panel-meta">${smeltProgress}</div>
-      </div>
-      <button data-furnace-action="collect" ${smelting && smeltReady ? "" : "disabled"}>Collect</button>
-    </div>`;
-
-  const edibleRows = inventory
-    .filter((entry) => entry.count > 0 && isEdibleItem(entry.itemId))
-    .map((entry) => `
-      <div class="action-row">
-        <div>
-          <div>Eat ${entry.itemId.replace("_", " ")}</div>
-          <div class="panel-meta">Restores ${getEdibleHunger(entry.itemId)} hunger</div>
-        </div>
-        <button data-consume-item="${entry.itemId}">Eat</button>
-      </div>`)
-    .join("");
-
-  const canSleep = !!stats?.isNight && (counts.get("bed") ?? 0) > 0;
-  actionListEl.innerHTML = `
-    ${edibleRows || '<div class="action-row disabled"><div><div>No food ready</div><div class="panel-meta">Cook meat or hunt animals</div></div><button disabled>Eat</button></div>'}
-    <div class="action-row ${canSleep ? "" : "disabled"}">
-      <div>
-        <div>Sleep</div>
-        <div class="panel-meta">${stats?.isNight ? "Night time" : "Only available at night"}${(counts.get("bed") ?? 0) > 0 ? "" : " | bed required"}</div>
-      </div>
-      <button data-action="sleep" ${canSleep ? "" : "disabled"}>Sleep</button>
-    </div>`;
-}
-
-function ensureHudLine(id: string, initialText: string): HTMLElement {
-  const existing = document.getElementById(id);
-  if (existing) return existing;
-  const line = document.createElement("div");
-  line.id = id;
-  line.textContent = initialText;
-  hudEl.appendChild(line);
-  return line;
-}
-
-function inventoryCounts(entries: InventoryEntry[]): Map<InventoryEntry["itemId"], number> {
-  return new Map(entries.map((entry) => [entry.itemId, entry.count]));
-}
-
-function preferredFuel(entries: InventoryEntry[]): InventoryEntry["itemId"] | null {
-  const counts = inventoryCounts(entries);
-  if ((counts.get("coal") ?? 0) > 0) return "coal";
-  if ((counts.get("log") ?? 0) > 0) return "log";
-  if ((counts.get("planks") ?? 0) > 0) return "planks";
-  return null;
-}
-
-function saveState(state: SavedState) {
-  try {
-    localStorage.setItem(SAVE_KEY, JSON.stringify(state));
-  } catch (err) {
-    console.warn("Failed to save state:", err);
-  }
-}
-
-function loadSavedState(): SavedState | null {
-  try {
-    const raw = localStorage.getItem(SAVE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as SavedState;
-    if (!parsed || parsed.version !== 1) return null;
-    return parsed;
-  } catch (err) {
-    console.warn("Failed to load saved state:", err);
-    return null;
-  }
-}
-
-function isFiniteVector(x: number, y: number, z: number): boolean {
-  return Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z);
+function isPlayerSheltered(x: number, y: number, z: number, blockCache: BlockCache): boolean {
+  return blockCache.isSolid(x, y + 0.4, z) || blockCache.isSolid(x, y + 1.0, z) || blockCache.isSolid(x, y + 1.8, z);
 }
 
 function normalise3(v: [number, number, number]): [number, number, number] {
@@ -906,5 +530,5 @@ function normalise3(v: [number, number, number]): [number, number, number] {
 
 main().catch((err) => {
   console.error(err);
-  setStatus(`Fatal error: ${String(err)}`);
+  statusEl.textContent = `Fatal error: ${String(err)}`;
 });
