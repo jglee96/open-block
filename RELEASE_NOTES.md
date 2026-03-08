@@ -134,7 +134,7 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 - 2026-03-08: `npm run build` passed.
 - 2026-03-08: `cargo test` passed (8 tests).
 - 2026-03-08: `npm run wasm` passed.
-- 2026-03-09: `npm run test:e2e` passed (5 Playwright tests).
+- 2026-03-09: `npm run test:e2e` passed (7 Playwright tests).
 
 ### Known Gaps
 - Entity visuals are logic-synced, but no dedicated entity mesh renderer yet.
@@ -146,6 +146,33 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 1. Add entity renderer and culling for visible feedback parity.
 2. Add entity feedback for fed/breed-ready animals.
 3. Add device-lost recovery state replay tests.
+
+## [2026-03-09 01:35 KST] Entity Interaction E2E Pass
+### Goal
+- Extend the Playwright coverage from world blocks into survival entity loops so breeding and combat regressions can be caught without manual playtesting.
+
+### Completed
+- Added Playwright coverage for feeding two sheep with held wheat and asserting that a baby sheep is spawned.
+- Added Playwright coverage for repeated pig attacks with a wooden pickaxe and validated the resulting raw meat drop.
+- Reused the new camera-pose and target-sampling E2E hooks to drive entity targeting through the same interaction path as block tests.
+- Tuned the entity targeting setup to use deterministic poses and seeded entity snapshots, avoiding false failures from world generation variability.
+
+### Changed Files
+- `RELEASE_NOTES.md`
+- `tests/e2e/game-ui.spec.ts`
+
+### Verification
+- Command: `npm run test:e2e`
+- Result: passed (7 tests)
+
+### Risks / Known Issues
+- Entity tests still assert logic state through snapshots rather than on-screen meshes, because dedicated entity rendering is not implemented yet.
+- Breeding and combat coverage does not yet exercise pointer-lock mouse movement, only deterministic camera pose injection.
+
+### Next Actions
+1. Add visible entity-state feedback so E2E can assert in-world breeding/combat transitions, not just worker snapshots.
+2. Add CI-smoke and full-suite split for Playwright coverage.
+3. Add device-lost recovery replay coverage so rendering robustness is tested alongside gameplay flows.
 
 ## [2026-03-09 01:20 KST] World Interaction E2E Pass
 ### Goal

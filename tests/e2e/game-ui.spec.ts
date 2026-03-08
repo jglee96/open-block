@@ -25,6 +25,23 @@ function createState(overrides: Partial<SavedState> = {}): SavedState {
   };
 }
 
+function createEntity(overrides: Partial<SavedState["entities"][number]> & Pick<SavedState["entities"][number], "id" | "kind">): SavedState["entities"][number] {
+  return {
+    id: overrides.id,
+    kind: overrides.kind,
+    position: overrides.position ?? { x: 8.5, y: 62, z: 6.2 },
+    radius: overrides.radius ?? 0.35,
+    halfHeight: overrides.halfHeight ?? 0.9,
+    health: overrides.health ?? (overrides.kind === "zombie" ? 20 : 8),
+    maxHealth: overrides.maxHealth ?? (overrides.kind === "zombie" ? 20 : 8),
+    hostile: overrides.hostile ?? (overrides.kind === "zombie"),
+    isBaby: overrides.isBaby ?? false,
+    growUpAtMs: overrides.growUpAtMs ?? null,
+    breedReadyAtMs: overrides.breedReadyAtMs ?? 0,
+    loveUntilMs: overrides.loveUntilMs ?? null,
+  };
+}
+
 async function seedSave(page: Page, state: SavedState) {
   await page.addInitScript((seededState) => {
     localStorage.setItem("open-block/save-v1", JSON.stringify(seededState));
@@ -79,6 +96,18 @@ async function sampleBlockTarget(page: Page): Promise<{ worldX: number; worldY: 
       worldY: target.hit.worldY,
       worldZ: target.hit.worldZ,
       faceNormal: target.hit.faceNormal,
+    };
+  });
+}
+
+async function sampleEntityTarget(page: Page): Promise<{ id: string; kind: string; isBaby: boolean } | null> {
+  return page.evaluate(() => {
+    const target = window.__openBlockE2E?.sampleTarget();
+    if (!target || target.kind !== "entity") return null;
+    return {
+      id: target.entity.id,
+      kind: target.entity.kind,
+      isBaby: target.entity.isBaby,
     };
   });
 }
@@ -262,4 +291,79 @@ test("prevents stone breaking without a pickaxe and allows it once a pickaxe is 
   await page.evaluate(() => window.__openBlockE2E?.interactAtCurrentTarget(0));
   await expect.poll(() => blockTypeAt(page, 8, 63, 6)).toBe(BLOCK_TYPE.air);
   await expect.poll(() => inventoryCount(page, "cobblestone")).toBe(1);
+});
+
+test("breeds two sheep when wheat is held and spawns a baby", async ({ page }) => {
+  await seedSave(
+    page,
+    createState({
+      inventory: [{ itemId: "wheat", count: 2 }],
+      entities: [
+        createEntity({ id: "sheep-a", kind: "sheep", position: { x: 8.2, y: 62, z: 6.2 } }),
+        createEntity({ id: "sheep-b", kind: "sheep", position: { x: 9.6, y: 62, z: 6.2 } }),
+      ],
+    }),
+  );
+  await waitForReady(page);
+
+  await page.keyboard.press("Digit6");
+  await expect
+    .poll(() => page.evaluate(() => window.__openBlockE2E?.getSnapshot().hotbar.selectedItemId ?? null))
+    .toBe("wheat");
+
+  await setPlayerPose(page, { x: 8.5, y: 62, z: 8.5, yaw: -0.12, pitch: 0 });
+  await expect.poll(() => sampleEntityTarget(page)).toEqual({ id: "sheep-a", kind: "sheep", isBaby: false });
+  await page.evaluate(() => window.__openBlockE2E?.interactAtCurrentTarget(2));
+  await expect.poll(() => inventoryCount(page, "wheat")).toBe(1);
+
+  await setPlayerPose(page, { x: 8.5, y: 62, z: 8.5, yaw: 0.45, pitch: 0 });
+  await expect.poll(() => sampleEntityTarget(page)).toEqual({ id: "sheep-b", kind: "sheep", isBaby: false });
+  await page.evaluate(() => window.__openBlockE2E?.interactAtCurrentTarget(2));
+  await expect.poll(() => inventoryCount(page, "wheat")).toBe(0);
+
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const entities = window.__openBlockE2E?.getSnapshot().entitySnapshots ?? [];
+        return {
+          count: entities.length,
+          babyCount: entities.filter((entity) => entity.kind === "sheep" && entity.isBaby).length,
+        };
+      }),
+    )
+    .toEqual({ count: 3, babyCount: 1 });
+});
+
+test("kills a pig after repeated attacks and awards meat drops", async ({ page }) => {
+  await seedSave(
+    page,
+    createState({
+      inventory: [{ itemId: "wooden_pickaxe", count: 1 }],
+      entities: [
+        createEntity({ id: "pig-a", kind: "pig", position: { x: 8.5, y: 62, z: 6.2 } }),
+      ],
+    }),
+  );
+  await waitForReady(page);
+
+  await setPlayerPose(page, { x: 8.5, y: 62, z: 8.5, yaw: 0, pitch: 0 });
+  await expect.poll(() => sampleEntityTarget(page)).toEqual({ id: "pig-a", kind: "pig", isBaby: false });
+
+  await page.evaluate(() => window.__openBlockE2E?.interactAtCurrentTarget(0));
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const pig = (window.__openBlockE2E?.getSnapshot().entitySnapshots ?? []).find((entity) => entity.id === "pig-a");
+        return pig?.health ?? 0;
+      }),
+    )
+    .toBe(4);
+
+  await page.evaluate(() => window.__openBlockE2E?.interactAtCurrentTarget(0));
+  await expect
+    .poll(() =>
+      page.evaluate(() => (window.__openBlockE2E?.getSnapshot().entitySnapshots ?? []).some((entity) => entity.id === "pig-a")),
+    )
+    .toBe(false);
+  await expect.poll(() => inventoryCount(page, "raw_meat")).toBe(2);
 });
