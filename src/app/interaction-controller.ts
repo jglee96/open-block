@@ -52,7 +52,7 @@ export class InteractionController {
       this.options.postToWorker({
         type: "INTERACT_ENTITY",
         entityId: targetHit.entity.id,
-        action: "interact",
+        action: this.options.hotbar.selectedItemId === "wheat" && this.options.hotbar.getSelectedCount() > 0 ? "breed" : "interact",
       });
       return;
     }

@@ -41,7 +41,7 @@ export type ItemId =
 
 export type PlaceableItemId = "cobblestone" | "dirt" | "sand" | "log";
 export type ToolItemId = "wooden_hoe" | "stone_hoe";
-export type HotbarItemId = PlaceableItemId | "wheat_seeds" | ToolItemId;
+export type HotbarItemId = PlaceableItemId | "wheat_seeds" | "wheat" | ToolItemId;
 
 export type RecipeId =
   | "planks"
@@ -147,9 +147,9 @@ export const HOTBAR_ITEMS: Array<HotbarItemId | null> = [
   "sand",
   "log",
   "wheat_seeds",
+  "wheat",
   "wooden_hoe",
   "stone_hoe",
-  null,
   null,
 ];
 
@@ -159,6 +159,7 @@ export const PLACEABLE_ITEM_COLORS: Partial<Record<HotbarItemId, string>> = {
   sand: "#eded99",
   log: "#6f4b2a",
   wheat_seeds: "#7aa83f",
+  wheat: "#c6a84a",
   wooden_hoe: "#99623b",
   stone_hoe: "#6a6a6a",
 };

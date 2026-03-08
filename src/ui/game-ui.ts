@@ -144,7 +144,7 @@ export class GameUi {
       ? "none"
       : model.target.kind === "block"
         ? `block (${model.target.hit.worldX},${model.target.hit.worldY},${model.target.hit.worldZ})`
-        : `${model.target.entity.kind}#${model.target.entity.id}`;
+        : `${model.target.entity.isBaby ? "baby " : ""}${model.target.entity.kind}#${model.target.entity.id}`;
     this.targetEl.textContent = `Target: ${targetLabel} | Held: ${model.selectedItemName} x${model.selectedCount}`;
     this.fpsEl.textContent = `FPS: ${model.fps.toFixed(1)}`;
 
@@ -156,13 +156,15 @@ export class GameUi {
       this.statsEl.textContent = "HP: - | Hunger: - | Time: -";
     }
 
+    const counts = inventoryCounts(model.inventory);
     const invPreview = model.inventory.slice(0, 6).map((entry) => `${entry.itemId}:${entry.count}`).join(" ") || "-";
     const edibleAvailable = model.inventory.some((entry) => isEdibleItem(entry.itemId) && entry.count > 0) ? "yes" : "no";
+    const breedingAvailable = (counts.get("wheat") ?? 0) > 0 ? "yes" : "no";
     const smeltReady = model.smelting ? Date.now() >= model.smelting.readyAtMs : false;
     const smeltLabel = model.smelting
       ? ` | Smelting: ${model.smelting.inputItem}->${model.smelting.outputItem} (${smeltReady ? "ready" : "running"})`
       : "";
-    this.inventoryEl.textContent = `Inventory: ${invPreview} | Food: ${edibleAvailable}${smeltLabel}`;
+    this.inventoryEl.textContent = `Inventory: ${invPreview} | Food: ${edibleAvailable} | Breed feed: ${breedingAvailable}${smeltLabel}`;
 
     this.diagnosticsEl.textContent =
       `FrameErr(main/worker): ${model.mainDiag.frameErrorCount}/${model.workerDiag.frameErrorCount} | ` +

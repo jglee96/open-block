@@ -237,13 +237,18 @@ export class GameSession {
     this.broadcastGameplay(true);
   }
 
-  interactEntity(entityId: string, action: "attack" | "interact") {
+  interactEntity(entityId: string, action: "attack" | "interact" | "breed") {
     const idx = this.entities.findIndex((entity) => entity.id === entityId);
     if (idx < 0) return;
     const entity = this.entities[idx];
 
+    if (action === "breed") {
+      this.tryBreedEntity(entity);
+      return;
+    }
+
     if (action === "interact") {
-      if (entity.kind === "sheep") this.addItem("wool", 1);
+      if (entity.kind === "sheep" && !entity.isBaby) this.addItem("wool", 1);
       this.broadcastGameplay(true);
       return;
     }
@@ -256,9 +261,9 @@ export class GameSession {
     }
 
     if (entity.kind === "pig") {
-      this.addItem("raw_meat", 2);
+      this.addItem("raw_meat", entity.isBaby ? 1 : 2);
     } else if (entity.kind === "sheep") {
-      this.addItem("wool", 2);
+      this.addItem("wool", entity.isBaby ? 1 : 2);
       this.addItem("raw_meat", 1);
     } else if (entity.kind === "zombie") {
       this.addItem("coal", 1);
@@ -310,8 +315,18 @@ export class GameSession {
 
     this.entities.length = 0;
     for (const entity of state.entities) {
-      this.entities.push({ ...entity, vx: 0, vz: 0, wanderTimer: 0 });
+      this.entities.push({
+        ...entity,
+        isBaby: entity.isBaby ?? false,
+        growUpAtMs: entity.growUpAtMs ?? null,
+        breedReadyAtMs: entity.breedReadyAtMs ?? 0,
+        loveUntilMs: entity.loveUntilMs ?? null,
+        vx: 0,
+        vz: 0,
+        wanderTimer: 0,
+      });
     }
+    this.nextEntityId = this.computeNextEntityId();
 
     this.blockOverrides.clear();
     for (const override of state.blockOverrides) {
@@ -416,6 +431,8 @@ export class GameSession {
     this.inventory.clear();
     this.cropPlots.clear();
     this.farmlandPlots.clear();
+    this.entities.length = 0;
+    this.nextEntityId = 1;
     this.stats.health = 20;
     this.stats.hunger = 20;
     this.stats.timeOfDay = 6_000;
@@ -579,7 +596,9 @@ export class GameSession {
 
     const spawn: Array<{ kind: EntityRuntime["kind"]; x: number; y: number; z: number; hostile: boolean }> = [
       { kind: "sheep", x: playerPos.x + 3, y: 62, z: playerPos.z - 4, hostile: false },
+      { kind: "sheep", x: playerPos.x + 6, y: 62, z: playerPos.z - 1, hostile: false },
       { kind: "pig", x: playerPos.x - 5, y: 62, z: playerPos.z + 2, hostile: false },
+      { kind: "pig", x: playerPos.x - 2, y: 62, z: playerPos.z + 5, hostile: false },
       { kind: "zombie", x: playerPos.x + 8, y: 62, z: playerPos.z + 7, hostile: true },
     ];
 
@@ -593,6 +612,10 @@ export class GameSession {
         health: item.kind === "zombie" ? 20 : 8,
         maxHealth: item.kind === "zombie" ? 20 : 8,
         hostile: item.hostile,
+        isBaby: false,
+        growUpAtMs: null,
+        breedReadyAtMs: 0,
+        loveUntilMs: null,
         vx: 0,
         vz: 0,
         wanderTimer: 0,
@@ -602,6 +625,7 @@ export class GameSession {
 
   private advanceWorld(dt: number, playerPos: Vec3) {
     const safeDt = Math.max(0, Math.min(0.2, dt));
+    const now = Date.now();
     this.ensureEntityPopulation(playerPos);
     this.advanceCropGrowth();
 
@@ -611,6 +635,18 @@ export class GameSession {
     this.stats.hunger = this.clamp(this.stats.hunger - safeDt * 0.03, 0, this.stats.maxHunger);
 
     for (const entity of this.entities) {
+      if (entity.isBaby && entity.growUpAtMs !== null && now >= entity.growUpAtMs) {
+        entity.isBaby = false;
+        entity.growUpAtMs = null;
+        entity.radius = 0.35;
+        entity.halfHeight = 0.9;
+        entity.health = Math.max(entity.health, 8);
+        entity.maxHealth = 8;
+      }
+      if (entity.loveUntilMs !== null && now >= entity.loveUntilMs) {
+        entity.loveUntilMs = null;
+      }
+
       const dx = playerPos.x - entity.position.x;
       const dz = playerPos.z - entity.position.z;
       const dist = Math.hypot(dx, dz);
@@ -656,7 +692,7 @@ export class GameSession {
       this.stats.health = this.clamp(this.stats.health - safeDt * 0.5, 0, this.stats.maxHealth);
     }
 
-    if (this.smelting && Date.now() >= this.smelting.readyAtMs + 30_000) {
+    if (this.smelting && now >= this.smelting.readyAtMs + 30_000) {
       this.smelting = null;
     }
 
@@ -747,5 +783,70 @@ export class GameSession {
       }
     }
     return false;
+  }
+
+  private tryBreedEntity(entity: EntityRuntime) {
+    if ((entity.kind !== "pig" && entity.kind !== "sheep") || entity.isBaby) return;
+    if (!this.hasItem("wheat", 1)) return;
+
+    const now = Date.now();
+    if (entity.breedReadyAtMs > now) return;
+    if (entity.loveUntilMs !== null && entity.loveUntilMs > now) return;
+
+    this.removeItem("wheat", 1);
+    entity.loveUntilMs = now + 12_000;
+
+    const mate = this.entities.find((other) => {
+      if (other.id === entity.id || other.kind !== entity.kind) return false;
+      if (other.hostile || other.isBaby || other.breedReadyAtMs > now) return false;
+      if (other.loveUntilMs === null || other.loveUntilMs <= now) return false;
+      const dx = other.position.x - entity.position.x;
+      const dz = other.position.z - entity.position.z;
+      return Math.hypot(dx, dz) <= 6;
+    });
+
+    if (!mate) {
+      this.broadcastGameplay(true);
+      return;
+    }
+
+    entity.loveUntilMs = null;
+    mate.loveUntilMs = null;
+    entity.breedReadyAtMs = now + 45_000;
+    mate.breedReadyAtMs = now + 45_000;
+
+    this.entities.push({
+      id: `e${this.nextEntityId++}`,
+      kind: entity.kind,
+      position: {
+        x: (entity.position.x + mate.position.x) * 0.5 + (Math.random() - 0.5) * 0.8,
+        y: entity.position.y,
+        z: (entity.position.z + mate.position.z) * 0.5 + (Math.random() - 0.5) * 0.8,
+      },
+      radius: 0.2,
+      halfHeight: 0.45,
+      health: 4,
+      maxHealth: 8,
+      hostile: false,
+      isBaby: true,
+      growUpAtMs: now + 90_000,
+      breedReadyAtMs: now + 90_000,
+      loveUntilMs: null,
+      vx: 0,
+      vz: 0,
+      wanderTimer: 0,
+    });
+    this.broadcastGameplay(true);
+  }
+
+  private computeNextEntityId(): number {
+    let nextId = 1;
+    for (const entity of this.entities) {
+      const numericId = Number.parseInt(entity.id.replace(/^e/, ""), 10);
+      if (Number.isFinite(numericId)) {
+        nextId = Math.max(nextId, numericId + 1);
+      }
+    }
+    return nextId;
   }
 }

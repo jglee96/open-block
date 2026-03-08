@@ -32,6 +32,10 @@ export interface EntitySnapshot {
   health: number;
   maxHealth: number;
   hostile: boolean;
+  isBaby: boolean;
+  growUpAtMs: number | null;
+  breedReadyAtMs: number;
+  loveUntilMs: number | null;
 }
 
 export interface InventoryEntry {
@@ -128,7 +132,7 @@ export interface SmeltCollectMsg {
 export interface InteractEntityMsg {
   type: "INTERACT_ENTITY";
   entityId: string;
-  action: "attack" | "interact";
+  action: "attack" | "interact" | "breed";
 }
 
 export interface CollectItemMsg {

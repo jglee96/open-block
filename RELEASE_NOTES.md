@@ -87,7 +87,7 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 ### Farming / renewable food
 - [x] Done: crops and seeds
 - [ ] Partial: water-aware farming
-- [ ] Missing: animal breeding
+- [x] Done: animal breeding
 
 ### Advanced progression
 - [ ] Missing: armor, durability, ore tiers beyond stone
@@ -120,6 +120,7 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 - Hotbar now reflects inventory-backed placeable items only.
 - Basic crop growth and bread crafting extend the food loop beyond mob drops.
 - Farming now includes hoe-based tilling and hydration checks using natural water pools.
+- Animals can now breed with wheat, producing baby animals that grow into adults over time.
 
 ### Fixed
 - Guarded render path against invalid target coordinates and frame exceptions that could cause black-screen behavior.
@@ -134,12 +135,45 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 - Entity visuals are logic-synced, but no dedicated entity mesh renderer yet.
 - Survival systems are intentionally simplified and need balancing.
 - Crafting table, furnace, and bed are inventory-state abstractions rather than placed world blocks.
-- Farming is still intentionally minimal: no durability, no explicit hydration HUD, and no breeding yet.
+- Farming is still intentionally minimal: no durability and no explicit hydration HUD yet.
 
 ### Next Priority
 1. Add entity renderer and culling for visible feedback parity.
-2. Add crop-specific rendering and breeding so the food loop is less placeholder-like.
+2. Add crop-specific rendering so the farming loop is less placeholder-like.
 3. Add device-lost recovery state replay tests.
+
+## [2026-03-08 22:20 KST] Animal Breeding Pass
+### Goal
+- Extend the tutorial-aligned renewable food loop from crops into livestock so wheat has a second progression use beyond bread.
+
+### Completed
+- Added `wheat` as a hotbar-selectable interaction item for animal feeding.
+- Extended entity snapshots/save state with baby growth and breeding cooldown fields while preserving backward-compatible defaults for existing saves.
+- Added `breed` as a worker interaction action for pigs and sheep, consuming wheat, pairing nearby fed adults, and spawning baby animals.
+- Grew baby animals into adults over time and reduced drops from baby livestock so breeding has an actual progression tradeoff.
+
+### Changed Files
+- `RELEASE_NOTES.md`
+- `src/app/interaction-controller.ts`
+- `src/gameplay/items.ts`
+- `src/ui/game-ui.ts`
+- `src/worker/game-session.ts`
+- `src/worker/protocol.ts`
+
+### Verification
+- Command: `npm run build`
+- Result: passed
+- Command: `cargo test`
+- Result: passed (7 tests)
+
+### Risks / Known Issues
+- Breeding is intentionally simplified: animals do not path toward feed, and the "in love" state is only visible indirectly through the resulting baby spawn.
+- There is still no dedicated entity renderer, so baby/adult differences are reflected in targeting/state only.
+
+### Next Actions
+1. Add crop-specific rendering so farmland and crop stages read clearly in the world.
+2. Add simple visual feedback for fed/breed-ready animals.
+3. Add a lightweight entity-state regression test path around save/load compatibility.
 
 ## [2026-03-08 20:55 KST] Tutorial Coverage Checklist + Phase 1 Survival Loop
 ### Goal
