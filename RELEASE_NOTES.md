@@ -213,6 +213,35 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 2. Add lightweight unit tests for the new TypeScript pure helpers (`block-cache`, targeting, inventory UI mapping).
 3. Reduce the remaining worker protocol surface by removing legacy `SET_BLOCK` and `COLLECT_ITEM` paths if they are no longer needed.
 
+## [2026-03-08 21:20 KST] Main.ts Decomposition Follow-up
+### Goal
+- Continue the no-React cleanup by extracting chunk streaming and worker lifecycle code out of `src/main.ts`.
+
+### Completed
+- Added `ChunkStreamingController` to own chunk request queueing, retention, and streaming cadence.
+- Added `GameWorkerClient` to own worker connection, ready-state dispatch, and restart logic.
+- Simplified `src/main.ts` so it primarily wires renderer, input, UI, chunk streaming, and worker events together.
+
+### Changed Files
+- `src/main.ts`
+- `src/app/chunk-streaming.ts`
+- `src/app/game-worker-client.ts`
+
+### Verification
+- Command: `npm run build`
+- Result: passed
+- Command: `cargo test`
+- Result: passed (6 tests)
+
+### Risks / Known Issues
+- `main.ts` is smaller, but input interaction and frame-loop gameplay orchestration still live in one file.
+- Worker protocol still includes legacy messages that the new flow no longer needs in normal gameplay paths.
+
+### Next Actions
+1. Extract interaction handling (`break/place/entity interact`) and frame HUD orchestration from `src/main.ts`.
+2. Remove legacy `SET_BLOCK` and `COLLECT_ITEM` messages if no remaining callers need them.
+3. Add small TypeScript tests around the new controllers before further refactors.
+
 ## Entry Template (copy for each session)
 
 ```md

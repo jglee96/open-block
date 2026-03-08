@@ -1,6 +1,8 @@
 import { HotbarManager } from "./hotbar";
 import { PlayerPhysics } from "./physics";
 import { loadState, saveState } from "./app/persistence";
+import { GameWorkerClient } from "./app/game-worker-client";
+import { ChunkStreamingController } from "./app/chunk-streaming";
 import {
   findBlockTarget,
   findEntityTarget,
@@ -23,7 +25,6 @@ import type {
   MainToWorker,
   PlayerStats,
   SmeltingState,
-  WorkerToMain,
 } from "./worker/protocol";
 
 const RENDER_RADIUS = 4;
@@ -97,13 +98,6 @@ async function main() {
   const hotbar = new HotbarManager();
   const blockCache = new BlockCache();
 
-  const requestedChunks = new Set<string>();
-  const queuedChunkRequests = new Set<string>();
-  const chunkRequestQueue: Array<{ cx: number; cz: number }> = [];
-
-  let worker: Worker | null = null;
-  let workerReady = false;
-  let restartAttempts = 0;
   let inventoryOpen = false;
 
   let entitySnapshots: EntitySnapshot[] = [];
@@ -131,10 +125,6 @@ async function main() {
   camera.position[1] = playerFeet[1] + EYE_HEIGHT;
   camera.position[2] = playerFeet[2];
 
-  function chunkKey(cx: number, cz: number): string {
-    return `${cx},${cz}`;
-  }
-
   function syncChromeVisibility() {
     ui.syncVisibility({ locked: input.locked, inventoryOpen });
   }
@@ -145,7 +135,7 @@ async function main() {
       document.exitPointerLock();
     }
     if (!nextOpen) {
-      ui.setOverlayTitle(workerReady ? "Paused" : "Open Block");
+      ui.setOverlayTitle(workerClient.isReady() ? "Paused" : "Open Block");
     }
     syncChromeVisibility();
   }
@@ -160,131 +150,65 @@ async function main() {
   resizeCanvas();
   new ResizeObserver(resizeCanvas).observe(canvas);
 
+  const workerClient = new GameWorkerClient({
+    workerUrl: new URL("./worker/game.worker.ts", import.meta.url),
+    seed: 42,
+    onReady: () => {
+      ui.setStatus("Ready — click to start");
+      const saved = loadState(SAVE_KEY);
+      if (saved) workerClient.send({ type: "LOAD_STATE", state: saved });
+    },
+    onChunkMesh: (msg) => {
+      scene.uploadChunk(msg.chunkX, msg.chunkZ, msg.buffer, msg.vertexCount);
+      scene.storeBlockData(msg.chunkX, msg.chunkZ, msg.blockData);
+      blockCache.storeChunk(msg.chunkX, msg.chunkZ, msg.blockData);
+    },
+    onEntitySnapshot: (msg) => {
+      entitySnapshots = msg.entities;
+    },
+    onInventorySync: (msg) => {
+      inventoryEntries = msg.entries;
+      smeltingState = msg.smelting;
+      hotbar.syncInventory(inventoryEntries);
+    },
+    onPlayerStats: (msg) => {
+      playerStats = msg.stats;
+    },
+    onFrameDiagnostics: (msg) => {
+      workerDiagnostics = msg.diagnostics;
+    },
+    onStateSnapshot: (msg) => {
+      saveState(SAVE_KEY, msg.state);
+    },
+    onErrorMessage: (message) => {
+      console.error("Worker error:", message);
+    },
+    onRestarting: (delayMs) => {
+      ui.setStatus(`Worker restarting in ${Math.round(delayMs / 1000)}s...`);
+    },
+  });
+
   const postToWorker = (msg: MainToWorker) => {
-    worker?.postMessage(msg);
+    workerClient.send(msg);
   };
 
-  function evictDistantChunkState(centerChunkX: number, centerChunkZ: number) {
-    scene.evictDistant(centerChunkX, centerChunkZ, RENDER_RADIUS + 2);
-    blockCache.evictDistant(centerChunkX, centerChunkZ, RENDER_RADIUS + 2, (cx, cz) => {
-      requestedChunks.delete(chunkKey(cx, cz));
-    });
-
-    for (const key of [...requestedChunks]) {
-      const [cx, cz] = key.split(",").map(Number);
-      if (Math.abs(cx - centerChunkX) > RENDER_RADIUS + 2 || Math.abs(cz - centerChunkZ) > RENDER_RADIUS + 2) {
-        requestedChunks.delete(key);
-      }
-    }
-  }
-
-  function requestSurroundingChunks() {
-    if (!workerReady) return;
-    const cx = Math.floor(camera.position[0] / CHUNK_SIZE);
-    const cz = Math.floor(camera.position[2] / CHUNK_SIZE);
-    evictDistantChunkState(cx, cz);
-
-    for (let dz = -RENDER_RADIUS; dz <= RENDER_RADIUS; dz++) {
-      for (let dx = -RENDER_RADIUS; dx <= RENDER_RADIUS; dx++) {
-        const targetChunkX = cx + dx;
-        const targetChunkZ = cz + dz;
-        const key = chunkKey(targetChunkX, targetChunkZ);
-        if (requestedChunks.has(key) || queuedChunkRequests.has(key)) continue;
-        queuedChunkRequests.add(key);
-        chunkRequestQueue.push({ cx: targetChunkX, cz: targetChunkZ });
-      }
-    }
-  }
-
-  function flushChunkQueue(maxPerFrame: number) {
-    if (!workerReady) return;
-    let sent = 0;
-    while (chunkRequestQueue.length > 0 && sent < maxPerFrame) {
-      const next = chunkRequestQueue.shift();
-      if (!next) break;
-      const key = chunkKey(next.cx, next.cz);
-      queuedChunkRequests.delete(key);
-      if (requestedChunks.has(key)) continue;
-      requestedChunks.add(key);
-      postToWorker({ type: "GENERATE_CHUNK", chunkX: next.cx, chunkZ: next.cz });
-      sent += 1;
-    }
-  }
-
-  function connectWorker() {
-    worker?.terminate();
-    workerReady = false;
-
-    worker = new Worker(new URL("./worker/game.worker.ts", import.meta.url), { type: "module" });
-    worker.onmessage = (event: MessageEvent<WorkerToMain>) => {
-      const msg = event.data;
-      switch (msg.type) {
-        case "READY": {
-          workerReady = true;
-          restartAttempts = 0;
-          ui.setStatus("Ready — click to start");
-          const saved = loadState(SAVE_KEY);
-          if (saved) postToWorker({ type: "LOAD_STATE", state: saved });
-          break;
-        }
-
-        case "CHUNK_MESH":
-          scene.uploadChunk(msg.chunkX, msg.chunkZ, msg.buffer, msg.vertexCount);
-          scene.storeBlockData(msg.chunkX, msg.chunkZ, msg.blockData);
-          blockCache.storeChunk(msg.chunkX, msg.chunkZ, msg.blockData);
-          break;
-
-        case "ENTITY_SNAPSHOT":
-          entitySnapshots = msg.entities;
-          break;
-
-        case "INVENTORY_SYNC":
-          inventoryEntries = msg.entries;
-          smeltingState = msg.smelting;
-          hotbar.syncInventory(inventoryEntries);
-          break;
-
-        case "PLAYER_STATS":
-          playerStats = msg.stats;
-          break;
-
-        case "FRAME_DIAGNOSTICS":
-          workerDiagnostics = msg.diagnostics;
-          break;
-
-        case "STATE_SNAPSHOT":
-          saveState(SAVE_KEY, msg.state);
-          break;
-
-        case "ERROR":
-          console.error("Worker error:", msg.message);
-          break;
-      }
-    };
-
-    worker.onerror = (event) => {
-      console.error("Worker crashed:", event.message);
-      workerReady = false;
-      scheduleWorkerRestart();
-    };
-
-    postToWorker({ type: "INIT", seed: 42 });
-  }
-
-  function scheduleWorkerRestart() {
-    restartAttempts += 1;
-    const delay = Math.min(4000, 500 * restartAttempts);
-    ui.setStatus(`Worker restarting in ${Math.round(delay / 1000)}s...`);
-    window.setTimeout(connectWorker, delay);
-  }
+  const chunkStreaming = new ChunkStreamingController({
+    renderRadius: RENDER_RADIUS,
+    retentionRadius: RENDER_RADIUS + 2,
+    scene,
+    blockCache,
+    requestChunk: ({ cx, cz }) => {
+      postToWorker({ type: "GENERATE_CHUNK", chunkX: cx, chunkZ: cz });
+    },
+  });
 
   ui.bindRecipeSelect((recipeId) => {
-    if (!workerReady) return;
+    if (!workerClient.isReady()) return;
     postToWorker({ type: "CRAFT", recipeId, quantity: 1 });
   });
 
   ui.bindFurnaceAction((action) => {
-    if (!workerReady) return;
+    if (!workerClient.isReady()) return;
     if (action === "start") {
       const fuelItem = preferredFuel(inventoryEntries);
       if (!fuelItem) return;
@@ -295,7 +219,7 @@ async function main() {
   });
 
   ui.bindAction((action) => {
-    if (!workerReady) return;
+    if (!workerClient.isReady()) return;
     if (action.type === "consume") {
       postToWorker({ type: "CONSUME_ITEM", itemId: action.itemId });
       return;
@@ -304,7 +228,7 @@ async function main() {
   });
 
   canvas.addEventListener("mousedown", (event) => {
-    if (!input.locked || !workerReady || !targetHit) return;
+    if (!input.locked || !workerClient.isReady() || !targetHit) return;
     if (event.button === 0) {
       if (targetHit.kind === "entity") {
         postToWorker({ type: "INTERACT_ENTITY", entityId: targetHit.entity.id, action: "attack" });
@@ -340,7 +264,7 @@ async function main() {
   canvas.addEventListener("contextmenu", (event) => event.preventDefault());
 
   document.addEventListener("keydown", (event) => {
-    if (event.code === "KeyE" && workerReady) {
+    if (event.code === "KeyE" && workerClient.isReady()) {
       event.preventDefault();
       setInventoryOpen(!inventoryOpen);
     }
@@ -357,15 +281,19 @@ async function main() {
     syncChromeVisibility();
   });
 
-  connectWorker();
+  workerClient.connect();
   syncChromeVisibility();
-  requestSurroundingChunks();
-  window.setInterval(requestSurroundingChunks, 1000);
+  chunkStreaming.updateFocus(camera.position[0], camera.position[2], CHUNK_SIZE);
   window.setInterval(() => {
-    if (workerReady) postToWorker({ type: "REQUEST_STATE" });
+    if (workerClient.isReady()) {
+      chunkStreaming.updateFocus(camera.position[0], camera.position[2], CHUNK_SIZE);
+    }
+  }, 1000);
+  window.setInterval(() => {
+    if (workerClient.isReady()) postToWorker({ type: "REQUEST_STATE" });
   }, 5000);
   window.addEventListener("beforeunload", () => {
-    if (workerReady) postToWorker({ type: "REQUEST_STATE" });
+    if (workerClient.isReady()) postToWorker({ type: "REQUEST_STATE" });
   });
 
   const uniformData = new Float32Array(UNIFORM_BUFFER_SIZE / 4);
@@ -410,8 +338,10 @@ async function main() {
         camera.position[1] = playerFeet[1] + EYE_HEIGHT;
         camera.position[2] = playerFeet[2];
 
-        requestSurroundingChunks();
-        flushChunkQueue(5);
+        if (workerClient.isReady()) {
+          chunkStreaming.updateFocus(camera.position[0], camera.position[2], CHUNK_SIZE);
+          chunkStreaming.flush(5);
+        }
 
         const blockTarget = findBlockTarget(
           camera,
@@ -446,7 +376,7 @@ async function main() {
         }
 
         tickAccumulator += dt;
-        if (workerReady && tickAccumulator >= 0.05) {
+        if (workerClient.isReady() && tickAccumulator >= 0.05) {
           postToWorker({
             type: "TICK",
             dt: tickAccumulator,
