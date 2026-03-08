@@ -110,6 +110,7 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 - Worker-authoritative survival actions: `BREAK_BLOCK`, `PLACE_ITEM`, `CONSUME_ITEM`.
 - Inventory overlay with crafting, furnace, and action panels.
 - Tree world generation with `Log` / `Leaves` blocks and spawn-adjacent wood access.
+- Playwright E2E harness with Chromium/WebGPU launch flags, seeded save-state helpers, and inventory/crafting/smelting coverage.
 
 ### Changed
 - Project naming switched from `web-minecraft` to `open-block`.
@@ -126,11 +127,14 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 ### Fixed
 - Guarded render path against invalid target coordinates and frame exceptions that could cause black-screen behavior.
 - Removed client-side fake progression where breaking, drops, and placement bypassed inventory/tool rules.
+- Stabilized crafting and furnace button interaction by stopping per-frame inventory panel DOM replacement.
+- Made the inventory overlay scrollable so furnace and action controls remain reachable on smaller viewports.
 
 ### Verification
 - 2026-03-08: `npm run build` passed.
-- 2026-03-08: `cargo test` passed (6 tests).
+- 2026-03-08: `cargo test` passed (8 tests).
 - 2026-03-08: `npm run wasm` passed.
+- 2026-03-09: `npm run test:e2e` passed (3 Playwright tests).
 
 ### Known Gaps
 - Entity visuals are logic-synced, but no dedicated entity mesh renderer yet.
@@ -190,7 +194,7 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 
 ### Verification
 - Command: `npm run build`
-- Result: pending
+- Result: passed
 
 ### Risks / Known Issues
 - Hints are intentionally single-step and priority-ordered; they do not yet show a persistent checklist or completed milestones.
@@ -200,6 +204,42 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 1. Promote tutorial hints into a visible checklist panel with completed milestone markers.
 2. Add crop-specific rendering so farm progress reads clearly from a distance.
 3. Add entity render feedback so breeding and combat state changes are visible in-world.
+
+## [2026-03-09 00:55 KST] Playwright E2E Pass
+### Goal
+- Add a browser-level regression path that can exercise the real UI and catch interaction bugs that unit-style checks miss.
+
+### Completed
+- Added Playwright configuration, Chromium/WebGPU launch flags, and `npm run test:e2e` scripts.
+- Added lightweight E2E hooks for seeded save-state setup and worker-backed state inspection under `?e2e=1`.
+- Added browser tests for inventory opening, first-day crafting progression, and furnace start/collect/eat flow.
+- Fixed two real interaction bugs found by the suite: frame-by-frame panel DOM replacement that broke button clicks, and a non-scrollable overlay layout that hid furnace/action controls off-screen.
+
+### Changed Files
+- `.gitignore`
+- `RELEASE_NOTES.md`
+- `index.html`
+- `package-lock.json`
+- `package.json`
+- `playwright.config.ts`
+- `src/main.ts`
+- `src/ui/game-ui.ts`
+- `tests/e2e/game-ui.spec.ts`
+
+### Verification
+- Command: `npm run build`
+- Result: passed
+- Command: `npm run test:e2e`
+- Result: passed (3 tests)
+
+### Risks / Known Issues
+- The current E2E suite focuses on overlay-driven flows; direct world-space break/place/combat interactions still need automation coverage.
+- `?e2e=1` exposes a small debug hook on `window` for tests, so future changes should keep that surface intentionally minimal.
+
+### Next Actions
+1. Add Playwright coverage for block breaking/placement and hotbar switching.
+2. Add an entity interaction test for breeding once world-space controls are scriptable.
+3. Add a small CI-friendly smoke target that runs the fastest subset of the E2E suite.
 
 ## [2026-03-08 22:20 KST] Animal Breeding Pass
 ### Goal

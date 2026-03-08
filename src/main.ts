@@ -20,6 +20,7 @@ import type {
   InventoryEntry,
   MainToWorker,
   PlayerStats,
+  SavedState,
   SmeltingState,
 } from "./worker/protocol";
 
@@ -35,6 +36,27 @@ const SKY_B = 0.98;
 const LIGHT_DIR: [number, number, number] = [0.6, 1.0, 0.4];
 const AMBIENT = 0.25;
 const SAVE_KEY = "open-block/save-v1";
+const E2E_ENABLED = new URLSearchParams(window.location.search).has("e2e");
+
+declare global {
+  interface Window {
+    __openBlockE2E?: {
+      clearSave: () => void;
+      getSnapshot: () => {
+        ready: boolean;
+        inventoryOpen: boolean;
+        statusText: string;
+        inventoryEntries: InventoryEntry[];
+        playerStats: PlayerStats | null;
+        smeltingState: SmeltingState | null;
+        entitySnapshots: EntitySnapshot[];
+      };
+      requestState: () => void;
+      seedSave: (state: SavedState) => void;
+      sendToWorker: (msg: MainToWorker) => void;
+    };
+  }
+}
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const overlay = document.getElementById("overlay") as HTMLElement;
@@ -187,6 +209,30 @@ async function main() {
   const postToWorker = (msg: MainToWorker) => {
     workerClient.send(msg);
   };
+
+  if (E2E_ENABLED) {
+    window.__openBlockE2E = {
+      clearSave: () => localStorage.removeItem(SAVE_KEY),
+      getSnapshot: () => ({
+        ready: workerClient.isReady(),
+        inventoryOpen,
+        statusText: statusEl.textContent ?? "",
+        inventoryEntries,
+        playerStats,
+        smeltingState,
+        entitySnapshots,
+      }),
+      requestState: () => {
+        if (workerClient.isReady()) postToWorker({ type: "REQUEST_STATE" });
+      },
+      seedSave: (state) => {
+        saveState(SAVE_KEY, state);
+      },
+      sendToWorker: (msg) => {
+        if (workerClient.isReady()) postToWorker(msg);
+      },
+    };
+  }
 
   const chunkStreaming = new ChunkStreamingController({
     renderRadius: RENDER_RADIUS,

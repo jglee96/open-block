@@ -109,8 +109,11 @@
         inset: 4vh 6vw;
         display: none;
         grid-template-columns: 1.1fr 1fr;
+        align-items: start;
         gap: 16px;
         padding: 20px;
+        max-height: 92vh;
+        overflow: hidden;
         background: rgba(12, 16, 20, 0.92);
         color: #f0f4f8;
         border: 1px solid rgba(255,255,255,0.12);
@@ -142,6 +145,19 @@
       .action-list {
         display: grid;
         gap: 8px;
+        min-height: 0;
+        overflow-y: auto;
+        padding-right: 4px;
+      }
+      .inventory-grid {
+        max-height: 56vh;
+      }
+      .recipe-list {
+        max-height: 32vh;
+      }
+      #furnace-panel,
+      #action-list {
+        max-height: 18vh;
       }
       .inventory-row,
       .recipe-row,
@@ -183,39 +199,41 @@
       .panel-columns {
         display: grid;
         gap: 16px;
+        align-content: start;
+        min-height: 0;
       }
     </style>
   </head>
   <body>
-    <canvas id="canvas"></canvas>
-    <div id="overlay">
+    <canvas id="canvas" data-testid="game-canvas"></canvas>
+    <div id="overlay" data-testid="overlay">
       <h1>Open Block</h1>
       <p>Click to start · WASD move · Space jump · 1-9 hotbar · LMB break/attack · RMB place/interact · E inventory</p>
-      <p id="status">Initializing WebGPU...</p>
+      <p id="status" data-testid="status">Initializing WebGPU...</p>
     </div>
-    <div id="inventory-panel" aria-hidden="true">
+    <div id="inventory-panel" data-testid="inventory-panel" aria-hidden="true">
       <section class="panel-card">
         <h2>Inventory</h2>
-        <div id="inventory-grid" class="inventory-grid"></div>
+        <div id="inventory-grid" data-testid="inventory-grid" class="inventory-grid"></div>
         <p class="panel-meta">Break logs by hand, turn them into planks, then unlock your first pickaxe.</p>
       </section>
       <div class="panel-columns">
         <section class="panel-card">
           <h2>Crafting</h2>
-          <div id="recipe-list" class="recipe-list"></div>
+          <div id="recipe-list" data-testid="recipe-list" class="recipe-list"></div>
         </section>
         <section class="panel-card">
           <h2>Furnace</h2>
-          <div id="furnace-panel" class="action-list"></div>
+          <div id="furnace-panel" data-testid="furnace-panel" class="action-list"></div>
         </section>
         <section class="panel-card">
           <h2>Actions</h2>
-          <div id="action-list" class="action-list"></div>
+          <div id="action-list" data-testid="action-list" class="action-list"></div>
         </section>
       </div>
     </div>
-    <div id="crosshair">+</div>
-    <div id="hud">
+    <div id="crosshair" data-testid="crosshair">+</div>
+    <div id="hud" data-testid="hud">
       <div id="pos">Position: 0, 0, 0</div>
       <div id="chunks">Chunks: 0</div>
     </div>

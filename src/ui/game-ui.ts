@@ -77,6 +77,7 @@ export class GameUi {
   private readonly inventoryEl: HTMLElement;
   private readonly guideEl: HTMLElement;
   private readonly diagnosticsEl: HTMLElement;
+  private lastInventoryPanelKey = "";
 
   constructor(private readonly elements: GameUiElements) {
     this.targetEl = ensureHudLine(elements.hud, "target", "Target: none");
@@ -178,6 +179,22 @@ export class GameUi {
 
   renderInventoryPanel(inventory: InventoryEntry[], stats: PlayerStats | null, smelting: SmeltingState | null) {
     const counts = inventoryCounts(inventory);
+    const smeltUiState = smelting
+      ? {
+          inputItem: smelting.inputItem,
+          outputItem: smelting.outputItem,
+          fuelItem: smelting.fuelItem,
+          readyBucket: Math.max(0, Math.ceil((smelting.readyAtMs - Date.now()) / 1000)),
+        }
+      : null;
+    const nextPanelKey = JSON.stringify({
+      inventory,
+      isNight: stats?.isNight ?? false,
+      smelting: smeltUiState,
+    });
+    if (nextPanelKey === this.lastInventoryPanelKey) return;
+    this.lastInventoryPanelKey = nextPanelKey;
+
     this.elements.inventoryGrid.innerHTML = inventory.length === 0
       ? '<div class="inventory-row empty-state"><span>Inventory empty</span><span>Break a tree to start</span></div>'
       : inventory
