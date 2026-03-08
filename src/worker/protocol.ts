@@ -55,6 +55,7 @@ export interface SavedState {
   entities: EntitySnapshot[];
   blockOverrides: Array<{ x: number; y: number; z: number; blockType: number }>;
   cropPlots?: Array<{ x: number; y: number; z: number; stage: number; nextGrowthAtMs: number }>;
+  farmlandPlots?: Array<{ x: number; y: number; z: number; dryAtMs: number | null }>;
 }
 
 // ── Main → Worker ──────────────────────────────────────────────────────────
@@ -87,6 +88,14 @@ export interface BreakBlockMsg {
 
 export interface PlaceItemMsg {
   type: "PLACE_ITEM";
+  worldX: number;
+  worldY: number;
+  worldZ: number;
+  itemId: ItemId;
+}
+
+export interface TillBlockMsg {
+  type: "TILL_BLOCK";
   worldX: number;
   worldY: number;
   worldZ: number;
@@ -152,6 +161,7 @@ export type MainToWorker =
   | SetBlockMsg
   | BreakBlockMsg
   | PlaceItemMsg
+  | TillBlockMsg
   | TickMsg
   | CraftMsg
   | SmeltStartMsg

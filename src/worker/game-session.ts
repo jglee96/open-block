@@ -3,9 +3,10 @@ import {
   getCropStage,
   getEdibleHunger,
   getHarvestRule,
-  isCropBlockType,
   getPlaceableBlockType,
   getRecipe,
+  isCropBlockType,
+  isHoeItem,
   type ItemId,
 } from "../gameplay/items";
 import type {
@@ -48,6 +49,13 @@ interface CropPlotState {
   nextGrowthAtMs: number;
 }
 
+interface FarmlandPlotState {
+  x: number;
+  y: number;
+  z: number;
+  dryAtMs: number | null;
+}
+
 type WasmWorld = import("mc-core").WasmWorld;
 
 export class GameSession {
@@ -59,6 +67,7 @@ export class GameSession {
   private readonly entities: EntityRuntime[] = [];
   private readonly blockOverrides = new Map<string, { x: number; y: number; z: number; blockType: number }>();
   private readonly cropPlots = new Map<string, CropPlotState>();
+  private readonly farmlandPlots = new Map<string, FarmlandPlotState>();
   private latestPlayerPos: Vec3 = { x: 8, y: 62, z: 8 };
   private lastBroadcastMs = 0;
   private lastStateSnapshotMs = 0;
@@ -148,6 +157,25 @@ export class GameSession {
     world.set_block(worldX, worldY, worldZ, blockType);
     this.setBlockOverride(worldX, worldY, worldZ, blockType);
     this.removeItem(itemId, 1);
+    this.remeshTouchedChunks(worldX, worldZ);
+    this.broadcastGameplay(true);
+  }
+
+  tillBlock(worldX: number, worldY: number, worldZ: number, itemId: ItemId) {
+    if (!isHoeItem(itemId) || !this.hasItem(itemId, 1)) return;
+    const blockType = this.getBlockTypeAtWorld(worldX, worldY, worldZ);
+    if (blockType !== BLOCK_TYPE.dirt && blockType !== BLOCK_TYPE.grass) return;
+    if (this.getBlockTypeAtWorld(worldX, worldY + 1, worldZ) !== BLOCK_TYPE.air) return;
+
+    const world = this.getWorld();
+    world.set_block(worldX, worldY, worldZ, BLOCK_TYPE.farmland);
+    this.setBlockOverride(worldX, worldY, worldZ, BLOCK_TYPE.farmland);
+    this.farmlandPlots.set(this.coordKey(worldX, worldY, worldZ), {
+      x: worldX,
+      y: worldY,
+      z: worldZ,
+      dryAtMs: null,
+    });
     this.remeshTouchedChunks(worldX, worldZ);
     this.broadcastGameplay(true);
   }
@@ -295,6 +323,11 @@ export class GameSession {
       this.cropPlots.set(this.coordKey(crop.x, crop.y, crop.z), { ...crop });
     }
 
+    this.farmlandPlots.clear();
+    for (const plot of state.farmlandPlots ?? []) {
+      this.farmlandPlots.set(this.coordKey(plot.x, plot.y, plot.z), { ...plot });
+    }
+
     this.broadcastGameplay(true);
     this.postStateSnapshot();
   }
@@ -382,6 +415,7 @@ export class GameSession {
   private hydrateDefaultState() {
     this.inventory.clear();
     this.cropPlots.clear();
+    this.farmlandPlots.clear();
     this.stats.health = 20;
     this.stats.hunger = 20;
     this.stats.timeOfDay = 6_000;
@@ -449,13 +483,17 @@ export class GameSession {
     if (this.getBlockTypeAtWorld(worldX, worldY, worldZ) !== BLOCK_TYPE.air) return;
 
     const soilBlock = this.getBlockTypeAtWorld(worldX, worldY - 1, worldZ);
-    if (soilBlock !== BLOCK_TYPE.dirt && soilBlock !== BLOCK_TYPE.grass && soilBlock !== BLOCK_TYPE.farmland) return;
+    if (soilBlock !== BLOCK_TYPE.farmland) return;
 
     const world = this.getWorld();
-    world.set_block(worldX, worldY - 1, worldZ, BLOCK_TYPE.farmland);
     world.set_block(worldX, worldY, worldZ, BLOCK_TYPE.wheatCrop0);
-    this.setBlockOverride(worldX, worldY - 1, worldZ, BLOCK_TYPE.farmland);
     this.setBlockOverride(worldX, worldY, worldZ, BLOCK_TYPE.wheatCrop0);
+    this.farmlandPlots.set(this.coordKey(worldX, worldY - 1, worldZ), {
+      x: worldX,
+      y: worldY - 1,
+      z: worldZ,
+      dryAtMs: null,
+    });
     this.cropPlots.set(this.coordKey(worldX, worldY, worldZ), {
       x: worldX,
       y: worldY,
@@ -485,12 +523,35 @@ export class GameSession {
   }
 
   private advanceCropGrowth() {
-    if (this.cropPlots.size === 0) return;
     const now = Date.now();
     const world = this.getWorld();
 
+    for (const farmland of [...this.farmlandPlots.values()]) {
+      const cropBlock = this.getBlockTypeAtWorld(farmland.x, farmland.y + 1, farmland.z);
+      const hydrated = this.isFarmlandHydrated(farmland.x, farmland.y, farmland.z);
+      const hasCrop = isCropBlockType(cropBlock);
+
+      if (hydrated) {
+        farmland.dryAtMs = null;
+        continue;
+      }
+
+      if (hasCrop) continue;
+      if (farmland.dryAtMs === null) {
+        farmland.dryAtMs = now + 20_000;
+        continue;
+      }
+      if (now < farmland.dryAtMs) continue;
+
+      world.set_block(farmland.x, farmland.y, farmland.z, BLOCK_TYPE.dirt);
+      this.setBlockOverride(farmland.x, farmland.y, farmland.z, BLOCK_TYPE.dirt);
+      this.farmlandPlots.delete(this.coordKey(farmland.x, farmland.y, farmland.z));
+      this.remeshTouchedChunks(farmland.x, farmland.z);
+    }
+
     for (const crop of this.cropPlots.values()) {
       if (crop.stage >= 3 || now < crop.nextGrowthAtMs) continue;
+      if (!this.isFarmlandHydrated(crop.x, crop.y - 1, crop.z)) continue;
       crop.stage += 1;
       crop.nextGrowthAtMs = now + 15_000;
       const blockType = this.blockTypeForCropStage(crop.stage);
@@ -665,6 +726,7 @@ export class GameSession {
       entities: this.entities.map(({ vx: _vx, vz: _vz, wanderTimer: _wt, ...snapshot }) => snapshot),
       blockOverrides: [...this.blockOverrides.values()],
       cropPlots: [...this.cropPlots.values()],
+      farmlandPlots: [...this.farmlandPlots.values()],
     };
   }
 
@@ -674,5 +736,16 @@ export class GameSession {
 
   private clamp(value: number, min: number, max: number): number {
     return Math.min(max, Math.max(min, value));
+  }
+
+  private isFarmlandHydrated(worldX: number, worldY: number, worldZ: number): boolean {
+    for (let dz = -2; dz <= 2; dz++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        if (this.getBlockTypeAtWorld(worldX + dx, worldY, worldZ + dz) === BLOCK_TYPE.water) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 }

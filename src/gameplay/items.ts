@@ -23,6 +23,8 @@ export type ItemId =
   | "cobblestone"
   | "crafting_table"
   | "furnace"
+  | "wooden_hoe"
+  | "stone_hoe"
   | "wooden_pickaxe"
   | "stone_pickaxe"
   | "raw_meat"
@@ -38,14 +40,17 @@ export type ItemId =
   | "bread";
 
 export type PlaceableItemId = "cobblestone" | "dirt" | "sand" | "log";
-export type HotbarItemId = PlaceableItemId | "wheat_seeds";
+export type ToolItemId = "wooden_hoe" | "stone_hoe";
+export type HotbarItemId = PlaceableItemId | "wheat_seeds" | ToolItemId;
 
 export type RecipeId =
   | "planks"
   | "sticks"
   | "crafting_table"
   | "wooden_pickaxe"
+  | "wooden_hoe"
   | "stone_pickaxe"
+  | "stone_hoe"
   | "furnace"
   | "bed"
   | "bread";
@@ -75,9 +80,21 @@ export const RECIPES: Recipe[] = [
     requiresCraftingTable: true,
   },
   {
+    id: "wooden_hoe",
+    inputs: { planks: 2, stick: 2 },
+    outputs: { wooden_hoe: 1 },
+    requiresCraftingTable: true,
+  },
+  {
     id: "stone_pickaxe",
     inputs: { cobblestone: 3, stick: 2 },
     outputs: { stone_pickaxe: 1 },
+    requiresCraftingTable: true,
+  },
+  {
+    id: "stone_hoe",
+    inputs: { cobblestone: 2, stick: 2 },
+    outputs: { stone_hoe: 1 },
     requiresCraftingTable: true,
   },
   {
@@ -130,8 +147,8 @@ export const HOTBAR_ITEMS: Array<HotbarItemId | null> = [
   "sand",
   "log",
   "wheat_seeds",
-  null,
-  null,
+  "wooden_hoe",
+  "stone_hoe",
   null,
   null,
 ];
@@ -142,6 +159,8 @@ export const PLACEABLE_ITEM_COLORS: Partial<Record<HotbarItemId, string>> = {
   sand: "#eded99",
   log: "#6f4b2a",
   wheat_seeds: "#7aa83f",
+  wooden_hoe: "#99623b",
+  stone_hoe: "#6a6a6a",
 };
 
 export const EDIBLE_HUNGER_BY_ITEM: Partial<Record<ItemId, number>> = {
@@ -220,4 +239,8 @@ export function getCropStage(blockType: number): number | null {
     default:
       return null;
   }
+}
+
+export function isHoeItem(itemId: ItemId): itemId is ToolItemId {
+  return itemId === "wooden_hoe" || itemId === "stone_hoe";
 }

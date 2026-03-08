@@ -99,4 +99,25 @@ mod tests {
         assert!(found_log);
         assert!(found_leaves);
     }
+
+    #[test]
+    fn nearby_chunks_can_contain_water() {
+        let mut world = World::new(42);
+        let mut found_water = false;
+
+        for cz in -2..=2 {
+            for cx in -2..=2 {
+                let chunk = world.generate_chunk(cx, cz);
+                for y in 0..CHUNK_HEIGHT {
+                    for z in 0..CHUNK_SIZE {
+                        for x in 0..CHUNK_SIZE {
+                            found_water |= chunk.get(x, y, z) == BlockType::Water;
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(found_water);
+    }
 }

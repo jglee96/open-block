@@ -72,7 +72,7 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 - [x] Done: hunger drain and food consumption
 - [x] Done: raw vs cooked meat hunger recovery
 - [ ] Partial: manual smelting with limited fuel/input set
-- [ ] Partial: renewable food sources and crop loop
+- [x] Done: renewable food sources and crop loop
 
 ### Shelter / night / combat
 - [x] Done: day/night state and hostile night pressure
@@ -85,8 +85,9 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 - [ ] Missing: biome-driven progression goals, villages, structures
 
 ### Farming / renewable food
-- [ ] Partial: crops and seeds
-- [ ] Missing: water-based farming, animal breeding
+- [x] Done: crops and seeds
+- [ ] Partial: water-aware farming
+- [ ] Missing: animal breeding
 
 ### Advanced progression
 - [ ] Missing: armor, durability, ore tiers beyond stone
@@ -118,6 +119,7 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 - Block breaking, drops, and block placement are validated in the worker rather than the client.
 - Hotbar now reflects inventory-backed placeable items only.
 - Basic crop growth and bread crafting extend the food loop beyond mob drops.
+- Farming now includes hoe-based tilling and hydration checks using natural water pools.
 
 ### Fixed
 - Guarded render path against invalid target coordinates and frame exceptions that could cause black-screen behavior.
@@ -132,11 +134,11 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 - Entity visuals are logic-synced, but no dedicated entity mesh renderer yet.
 - Survival systems are intentionally simplified and need balancing.
 - Crafting table, furnace, and bed are inventory-state abstractions rather than placed world blocks.
-- Farming is intentionally minimal: no hydration, hoes, or breeding yet.
+- Farming is still intentionally minimal: no durability, no explicit hydration HUD, and no breeding yet.
 
 ### Next Priority
 1. Add entity renderer and culling for visible feedback parity.
-2. Add water/hoe-aware farming and breeding so the food loop is less placeholder-like.
+2. Add crop-specific rendering and breeding so the food loop is less placeholder-like.
 3. Add device-lost recovery state replay tests.
 
 ## [2026-03-08 20:55 KST] Tutorial Coverage Checklist + Phase 1 Survival Loop
@@ -309,6 +311,43 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 1. Add hydration/hoe rules and clearer farmland degradation behavior.
 2. Add visual treatment for crops that does not rely on full cube geometry.
 3. Add breeding or another renewable food source to deepen the survival loop.
+
+## [2026-03-08 22:00 KST] Farming Rules Pass
+### Goal
+- Continue the renewable food implementation by turning farming from a placeholder into a more rule-based loop with tools and hydration.
+
+### Completed
+- Added `wooden_hoe` and `stone_hoe` recipes plus hotbar support for tool-based tilling.
+- Added `TILL_BLOCK` flow so farmland is created by right-clicking dirt/grass with a hoe rather than auto-tilling on seed placement.
+- Restricted seed planting to farmland only and added farmland hydration checks, drying timers, and reversion to dirt when unplanted soil stays dry.
+- Added simple natural water generation in world terrain so hydration has real world inputs.
+
+### Changed Files
+- `src/gameplay/items.ts`
+- `src/worker/protocol.ts`
+- `src/worker/game.worker.ts`
+- `src/worker/game-session.ts`
+- `src/app/interaction-controller.ts`
+- `crates/mc-core/src/world/terrain.rs`
+- `crates/mc-core/src/world/mod.rs`
+- `RELEASE_NOTES.md`
+
+### Verification
+- Command: `npm run build`
+- Result: passed
+- Command: `cargo test`
+- Result: passed (7 tests)
+- Command: `npm run wasm`
+- Result: passed
+
+### Risks / Known Issues
+- Water generation is simple lowland flooding, so it behaves more like broad shallow pools than authored ponds or rivers.
+- Crop blocks still use cube meshing, so hydrated farming plays correctly but does not yet look close to Minecraft crops.
+
+### Next Actions
+1. Add crop-specific rendering that avoids full cube silhouettes.
+2. Add breeding or another non-crop renewable food loop.
+3. Remove legacy `SET_BLOCK` and `COLLECT_ITEM` protocol paths if they are no longer necessary.
 
 ## Entry Template (copy for each session)
 

@@ -4,6 +4,7 @@ use crate::block::BlockType;
 use crate::chunk::{Chunk, CHUNK_HEIGHT, CHUNK_SIZE};
 
 pub type HeightMap = [[usize; CHUNK_SIZE]; CHUNK_SIZE];
+const WATER_LEVEL: usize = 18;
 
 pub fn build_height_map(noise: &Perlin, chunk_x: i32, chunk_z: i32) -> HeightMap {
     let mut heights = [[0usize; CHUNK_SIZE]; CHUNK_SIZE];
@@ -23,6 +24,11 @@ pub fn fill_chunk_terrain(chunk: &mut Chunk, heights: &HeightMap) {
             let surface = heights[lz][lx];
             for y in 0..CHUNK_HEIGHT {
                 chunk.set(lx, y, lz, classify_block(surface, y));
+            }
+            if surface < WATER_LEVEL {
+                for y in (surface + 1)..=WATER_LEVEL {
+                    chunk.set(lx, y, lz, BlockType::Water);
+                }
             }
         }
     }
@@ -51,6 +57,8 @@ fn classify_block(surface: usize, y: usize) -> BlockType {
         BlockType::Dirt
     } else if y == surface {
         if surface < 12 {
+            BlockType::Sand
+        } else if surface < WATER_LEVEL {
             BlockType::Sand
         } else if surface > 50 {
             BlockType::Snow

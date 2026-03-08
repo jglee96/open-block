@@ -40,6 +40,11 @@ self.onmessage = async (event: MessageEvent<MainToWorker>) => {
         session.placeItem(msg.worldX, msg.worldY, msg.worldZ, msg.itemId);
         break;
 
+      case "TILL_BLOCK":
+        session.requireReady();
+        session.tillBlock(msg.worldX, msg.worldY, msg.worldZ, msg.itemId);
+        break;
+
       case "TICK":
         session.requireReady();
         session.tick(msg.dt, msg.playerPos, msg.isSheltered);

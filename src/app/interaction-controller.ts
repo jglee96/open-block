@@ -1,4 +1,5 @@
 import { HotbarManager } from "../hotbar";
+import { isHoeItem } from "../gameplay/items";
 import type { TargetHit } from "../target";
 import type { MainToWorker } from "../worker/protocol";
 import { wouldOverlapPlayer } from "./targeting";
@@ -58,6 +59,17 @@ export class InteractionController {
 
     const selectedItemId = this.options.hotbar.selectedItemId;
     if (!selectedItemId || this.options.hotbar.getSelectedCount() <= 0) return;
+
+    if (isHoeItem(selectedItemId)) {
+      this.options.postToWorker({
+        type: "TILL_BLOCK",
+        worldX: targetHit.hit.worldX,
+        worldY: targetHit.hit.worldY,
+        worldZ: targetHit.hit.worldZ,
+        itemId: selectedItemId,
+      });
+      return;
+    }
 
     const px = targetHit.hit.worldX + targetHit.hit.faceNormal[0];
     const py = targetHit.hit.worldY + targetHit.hit.faceNormal[1];
