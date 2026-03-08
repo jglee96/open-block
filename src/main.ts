@@ -1,4 +1,10 @@
-import { getBlockDropItem } from "./gameplay/items";
+import {
+  BLOCK_TYPE,
+  getEdibleHunger,
+  isEdibleItem,
+  RECIPES,
+  type RecipeId,
+} from "./gameplay/items";
 import { HotbarManager } from "./hotbar";
 import { PlayerPhysics } from "./physics";
 import { raycast } from "./raycast";
@@ -40,6 +46,11 @@ const posEl = document.getElementById("pos") as HTMLElement;
 const chunksEl = document.getElementById("chunks") as HTMLElement;
 const hudEl = document.getElementById("hud") as HTMLElement;
 const hotbarEl = document.getElementById("hotbar") as HTMLElement;
+const inventoryPanelEl = document.getElementById("inventory-panel") as HTMLElement;
+const inventoryGridEl = document.getElementById("inventory-grid") as HTMLElement;
+const recipeListEl = document.getElementById("recipe-list") as HTMLElement;
+const furnacePanelEl = document.getElementById("furnace-panel") as HTMLElement;
+const actionListEl = document.getElementById("action-list") as HTMLElement;
 
 const targetEl = ensureHudLine("target", "Target: none");
 const fpsEl = ensureHudLine("fps", "FPS: 0");
@@ -58,41 +69,24 @@ function chunkKey(cx: number, cz: number): string {
 }
 
 function getBlockTypeAt(wx: number, wy: number, wz: number): number {
-  if (wy < 0 || wy >= CHUNK_HEIGHT) return 0;
+  if (wy < 0 || wy >= CHUNK_HEIGHT) return BLOCK_TYPE.air;
   const bx = Math.floor(wx);
   const by = Math.floor(wy);
   const bz = Math.floor(wz);
   const cx = Math.floor(bx / CHUNK_SIZE);
   const cz = Math.floor(bz / CHUNK_SIZE);
   const data = blockCache.get(chunkKey(cx, cz));
-  if (!data) return 0;
+  if (!data) return BLOCK_TYPE.air;
   const lx = ((bx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
   const lz = ((bz % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
   const idx = by * CHUNK_SIZE * CHUNK_SIZE + lz * CHUNK_SIZE + lx;
-  return data[idx] ?? 0;
-}
-
-function setBlockTypeInCache(wx: number, wy: number, wz: number, blockType: number) {
-  if (wy < 0 || wy >= CHUNK_HEIGHT) return;
-  const bx = Math.floor(wx);
-  const by = Math.floor(wy);
-  const bz = Math.floor(wz);
-  const cx = Math.floor(bx / CHUNK_SIZE);
-  const cz = Math.floor(bz / CHUNK_SIZE);
-  const key = chunkKey(cx, cz);
-  const data = blockCache.get(key);
-  if (!data) return;
-
-  const lx = ((bx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-  const lz = ((bz % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-  const idx = by * CHUNK_SIZE * CHUNK_SIZE + lz * CHUNK_SIZE + lx;
-  data[idx] = blockType;
+  return data[idx] ?? BLOCK_TYPE.air;
 }
 
 function isSolid(wx: number, wy: number, wz: number): boolean {
   if (wy < 0) return true;
   const block = getBlockTypeAt(wx, wy, wz);
-  return block !== 0 && block !== 5;
+  return block !== BLOCK_TYPE.air && block !== BLOCK_TYPE.water;
 }
 
 let depthTexture: GPUTexture | null = null;
@@ -135,6 +129,7 @@ async function main() {
   let inventoryEntries: InventoryEntry[] = [];
   let smeltingState: SmeltingState | null = null;
   let workerDiagnostics: FrameDiagnostics = { frameErrorCount: 0, lastErrorCode: null };
+  let inventoryOpen = false;
 
   const mainDiagnostics = {
     frameErrorCount: 0,
@@ -166,6 +161,30 @@ async function main() {
 
   const postToWorker = (msg: MainToWorker) => {
     worker?.postMessage(msg);
+  };
+
+  const syncChromeVisibility = () => {
+    const paused = !input.locked && !inventoryOpen;
+    overlay.classList.toggle("hidden", !paused);
+    inventoryPanelEl.classList.toggle("visible", inventoryOpen);
+    inventoryPanelEl.setAttribute("aria-hidden", inventoryOpen ? "false" : "true");
+    crosshair.style.display = input.locked ? "block" : "none";
+    hudEl.style.display = paused ? "none" : "block";
+    hotbarEl.style.display = input.locked ? "flex" : "none";
+  };
+
+  const setInventoryOpen = (nextOpen: boolean) => {
+    inventoryOpen = nextOpen;
+    if (nextOpen && document.pointerLockElement === canvas) {
+      document.exitPointerLock();
+    }
+    if (!nextOpen) {
+      overlay.querySelector("h1")!.textContent = "Paused";
+      if (!workerReady) {
+        overlay.querySelector("h1")!.textContent = "Open Block";
+      }
+    }
+    syncChromeVisibility();
   };
 
   const connectWorker = () => {
@@ -207,7 +226,7 @@ async function main() {
         case "INVENTORY_SYNC":
           inventoryEntries = msg.entries;
           smeltingState = msg.smelting;
-          hotbar.setBlockCounts(toBlockCounts(inventoryEntries));
+          hotbar.syncInventory(inventoryEntries);
           break;
 
         case "PLAYER_STATS":
@@ -247,6 +266,7 @@ async function main() {
   };
 
   connectWorker();
+  syncChromeVisibility();
 
   window.setInterval(() => {
     if (workerReady) postToWorker({ type: "REQUEST_STATE" });
@@ -258,18 +278,14 @@ async function main() {
 
   document.addEventListener("pointerlockchange", () => {
     if (document.pointerLockElement === canvas) {
+      inventoryOpen = false;
       overlay.classList.add("hidden");
-      crosshair.style.display = "block";
-      hudEl.style.display = "block";
-      hotbarEl.style.display = "flex";
-    } else {
+    } else if (!inventoryOpen) {
       overlay.classList.remove("hidden");
       overlay.querySelector("h1")!.textContent = "Paused";
       setStatus("Click to resume");
-      crosshair.style.display = "none";
-      hudEl.style.display = "none";
-      hotbarEl.style.display = "none";
     }
+    syncChromeVisibility();
   });
 
   let targetHit: TargetHit = null;
@@ -286,44 +302,45 @@ async function main() {
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
   document.addEventListener("keydown", (e) => {
-    if (!input.locked) return;
-    switch (e.code) {
-      case "KeyC":
-        postToWorker({ type: "CRAFT", recipeId: "planks", quantity: 1 });
-        setStatus("Crafted planks (if resources available)");
-        break;
-      case "KeyV":
-        postToWorker({ type: "CRAFT", recipeId: "crafting_table", quantity: 1 });
-        setStatus("Crafted crafting table (if resources available)");
-        break;
-      case "KeyB":
-        postToWorker({ type: "CRAFT", recipeId: "sticks", quantity: 1 });
-        setStatus("Crafted sticks (if resources available)");
-        break;
-      case "KeyN":
-        postToWorker({ type: "CRAFT", recipeId: "wooden_pickaxe", quantity: 1 });
-        setStatus("Crafted wooden pickaxe (if resources available)");
-        break;
-      case "KeyM":
-        postToWorker({ type: "CRAFT", recipeId: "furnace", quantity: 1 });
-        setStatus("Crafted furnace (if resources available)");
-        break;
-      case "KeyK":
-        postToWorker({ type: "CRAFT", recipeId: "bed", quantity: 1 });
-        setStatus("Crafted bed (if resources available)");
-        break;
-      case "KeyF":
-        postToWorker({ type: "SMELT_START", inputItem: "raw_meat", fuelItem: "coal" });
-        setStatus("Smelting started (needs furnace/raw_meat/fuel)");
-        break;
-      case "KeyG":
-        postToWorker({ type: "SMELT_COLLECT" });
-        setStatus("Collected smelted item (if ready)");
-        break;
-      case "KeyL":
-        postToWorker({ type: "SLEEP" });
-        setStatus("Tried sleeping (requires night + bed)");
-        break;
+    if (e.code === "KeyE" && workerReady) {
+      e.preventDefault();
+      setInventoryOpen(!inventoryOpen);
+    }
+  });
+
+  recipeListEl.addEventListener("click", (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-recipe-id]");
+    if (!button || !workerReady) return;
+    const recipeId = button.dataset.recipeId as RecipeId | undefined;
+    if (!recipeId) return;
+    postToWorker({ type: "CRAFT", recipeId, quantity: 1 });
+  });
+
+  furnacePanelEl.addEventListener("click", (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-furnace-action]");
+    if (!button || !workerReady) return;
+    const action = button.dataset.furnaceAction;
+    if (action === "start") {
+      const fuelItem = preferredFuel(inventoryEntries);
+      if (!fuelItem) return;
+      postToWorker({ type: "SMELT_START", inputItem: "raw_meat", fuelItem });
+      return;
+    }
+    if (action === "collect") {
+      postToWorker({ type: "SMELT_COLLECT" });
+    }
+  });
+
+  actionListEl.addEventListener("click", (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button");
+    if (!button || !workerReady) return;
+    const consumeItem = button.dataset.consumeItem as InventoryEntry["itemId"] | undefined;
+    if (consumeItem) {
+      postToWorker({ type: "CONSUME_ITEM", itemId: consumeItem });
+      return;
+    }
+    if (button.dataset.action === "sleep") {
+      postToWorker({ type: "SLEEP" });
     }
   });
 
@@ -336,22 +353,7 @@ async function main() {
     }
 
     const { worldX, worldY, worldZ } = target.hit;
-    const blockType = getBlockTypeAt(worldX, worldY, worldZ);
-
-    postToWorker({
-      type: "SET_BLOCK",
-      worldX,
-      worldY,
-      worldZ,
-      blockType: 0,
-    });
-
-    setBlockTypeInCache(worldX, worldY, worldZ, 0);
-
-    const drop = getBlockDropItem(blockType);
-    if (drop) {
-      postToWorker({ type: "COLLECT_ITEM", itemId: drop, count: 1 });
-    }
+    postToWorker({ type: "BREAK_BLOCK", worldX, worldY, worldZ });
   }
 
   function handleSecondaryInteraction(target: TargetHit) {
@@ -365,18 +367,18 @@ async function main() {
     const px = target.hit.worldX + target.hit.faceNormal[0];
     const py = target.hit.worldY + target.hit.faceNormal[1];
     const pz = target.hit.worldZ + target.hit.faceNormal[2];
+    const selectedItemId = hotbar.selectedItemId;
 
+    if (!selectedItemId || hotbar.getSelectedCount() <= 0) return;
     if (wouldOverlapPlayer(px, py, pz, playerFeet)) return;
 
     postToWorker({
-      type: "SET_BLOCK",
+      type: "PLACE_ITEM",
       worldX: px,
       worldY: py,
       worldZ: pz,
-      blockType: hotbar.selectedBlockType,
+      itemId: selectedItemId,
     });
-
-    setBlockTypeInCache(px, py, pz, hotbar.selectedBlockType);
   }
 
   function requestSurroundingChunks() {
@@ -557,7 +559,20 @@ async function main() {
       pass.end();
 
       device.queue.submit([encoder.finish()]);
-      renderHud(targetHit, fpsValue, playerStats, inventoryEntries, smeltingState, mainDiagnostics, workerDiagnostics, hotbar.selectedBlockName, scene.chunkCount, camera.position);
+      renderHud(
+        targetHit,
+        fpsValue,
+        playerStats,
+        inventoryEntries,
+        smeltingState,
+        mainDiagnostics,
+        workerDiagnostics,
+        hotbar.selectedItemName,
+        hotbar.getSelectedCount(),
+        scene.chunkCount,
+        camera.position,
+      );
+      renderInventoryPanel(inventoryEntries, playerStats, smeltingState);
     } catch (err) {
       mainDiagnostics.frameErrorCount += 1;
       mainDiagnostics.lastErrorCode = "FRAME_EXCEPTION";
@@ -711,7 +726,8 @@ function renderHud(
   smelting: SmeltingState | null,
   mainDiag: { frameErrorCount: number; lastErrorCode: string | null; lastGpuError: string | null },
   workerDiag: FrameDiagnostics,
-  selectedBlockName: string,
+  selectedItemName: string,
+  selectedCount: number,
   chunkCount: number,
   cameraPos: ArrayLike<number>,
 ) {
@@ -723,7 +739,7 @@ function renderHud(
     : target.kind === "block"
       ? `block (${target.hit.worldX},${target.hit.worldY},${target.hit.worldZ})`
       : `${target.entity.kind}#${target.entity.id}`;
-  targetEl.textContent = `Target: ${targetLabel} | Held: ${selectedBlockName}`;
+  targetEl.textContent = `Target: ${targetLabel} | Held: ${selectedItemName} x${selectedCount}`;
 
   fpsEl.textContent = `FPS: ${fps.toFixed(1)}`;
 
@@ -737,13 +753,102 @@ function renderHud(
   }
 
   const invPreview = inventory.slice(0, 6).map((entry) => `${entry.itemId}:${entry.count}`).join(" ") || "-";
-  const smeltLabel = smelting ? ` | Smelting: ${smelting.inputItem}->${smelting.outputItem}` : "";
-  invEl.textContent = `Inventory: ${invPreview}${smeltLabel}`;
+  const edibleAvailable = inventory.some((entry) => isEdibleItem(entry.itemId) && entry.count > 0) ? "yes" : "no";
+  const smeltReady = smelting ? Date.now() >= smelting.readyAtMs : false;
+  const smeltLabel = smelting
+    ? ` | Smelting: ${smelting.inputItem}->${smelting.outputItem} (${smeltReady ? "ready" : "running"})`
+    : "";
+  invEl.textContent = `Inventory: ${invPreview} | Food: ${edibleAvailable}${smeltLabel}`;
 
   diagEl.textContent =
     `FrameErr(main/worker): ${mainDiag.frameErrorCount}/${workerDiag.frameErrorCount} | ` +
     `Last(main): ${mainDiag.lastErrorCode ?? "-"} | Last(worker): ${workerDiag.lastErrorCode ?? "-"}` +
     (mainDiag.lastGpuError ? ` | GPU: ${mainDiag.lastGpuError}` : "");
+}
+
+function renderInventoryPanel(
+  inventory: InventoryEntry[],
+  stats: PlayerStats | null,
+  smelting: SmeltingState | null,
+) {
+  const counts = inventoryCounts(inventory);
+  const inventoryRows = inventory.length === 0
+    ? '<div class="inventory-row empty-state"><span>Inventory empty</span><span>Break a tree to start</span></div>'
+    : inventory
+        .map((entry) => {
+          const edible = isEdibleItem(entry.itemId) ? ` (+${getEdibleHunger(entry.itemId)} hunger)` : "";
+          return `<div class="inventory-row"><span>${entry.itemId.replace("_", " ")}</span><span>${entry.count}${edible}</span></div>`;
+        })
+        .join("");
+  inventoryGridEl.innerHTML = inventoryRows;
+
+  recipeListEl.innerHTML = RECIPES.map((recipe) => {
+    const canCraft = recipe.inputs
+      ? Object.entries(recipe.inputs).every(([itemId, count]) => (counts.get(itemId as InventoryEntry["itemId"]) ?? 0) >= (count ?? 0))
+      : true;
+    const hasStation = !recipe.requiresCraftingTable || (counts.get("crafting_table") ?? 0) > 0;
+    const enabled = canCraft && hasStation;
+    const inputs = Object.entries(recipe.inputs)
+      .map(([itemId, count]) => `${itemId}:${count}`)
+      .join(" ");
+    const outputs = Object.entries(recipe.outputs)
+      .map(([itemId, count]) => `${itemId}:${count}`)
+      .join(" ");
+    const requirement = recipe.requiresCraftingTable ? " | needs crafting table" : "";
+    return `
+      <div class="recipe-row ${enabled ? "" : "disabled"}">
+        <div>
+          <div>${recipe.id.replace("_", " ")}</div>
+          <div class="panel-meta">${inputs} -> ${outputs}${requirement}</div>
+        </div>
+        <button data-recipe-id="${recipe.id}" ${enabled ? "" : "disabled"}>Craft</button>
+      </div>`;
+  }).join("");
+
+  const fuel = preferredFuel(inventory);
+  const canStartSmelting = !smelting && (counts.get("furnace") ?? 0) > 0 && (counts.get("raw_meat") ?? 0) > 0 && !!fuel;
+  const smeltReady = smelting ? Date.now() >= smelting.readyAtMs : false;
+  const smeltProgress = smelting
+    ? `${Math.max(0, smelting.readyAtMs - Date.now()) <= 0 ? "Ready to collect" : `${Math.ceil(Math.max(0, smelting.readyAtMs - Date.now()) / 1000)}s remaining`}`
+    : "Idle";
+  furnacePanelEl.innerHTML = `
+    <div class="action-row ${canStartSmelting ? "" : "disabled"}">
+      <div>
+        <div>Cook raw meat</div>
+        <div class="panel-meta">Needs furnace, raw meat, and fuel (${fuel ?? "none"})</div>
+      </div>
+      <button data-furnace-action="start" ${canStartSmelting ? "" : "disabled"}>Start</button>
+    </div>
+    <div class="action-row ${smelting && smeltReady ? "" : "disabled"}">
+      <div>
+        <div>${smelting ? `${smelting.inputItem} -> ${smelting.outputItem}` : "No active smelt"}</div>
+        <div class="panel-meta">${smeltProgress}</div>
+      </div>
+      <button data-furnace-action="collect" ${smelting && smeltReady ? "" : "disabled"}>Collect</button>
+    </div>`;
+
+  const edibleRows = inventory
+    .filter((entry) => entry.count > 0 && isEdibleItem(entry.itemId))
+    .map((entry) => `
+      <div class="action-row">
+        <div>
+          <div>Eat ${entry.itemId.replace("_", " ")}</div>
+          <div class="panel-meta">Restores ${getEdibleHunger(entry.itemId)} hunger</div>
+        </div>
+        <button data-consume-item="${entry.itemId}">Eat</button>
+      </div>`)
+    .join("");
+
+  const canSleep = !!stats?.isNight && (counts.get("bed") ?? 0) > 0;
+  actionListEl.innerHTML = `
+    ${edibleRows || '<div class="action-row disabled"><div><div>No food ready</div><div class="panel-meta">Cook meat or hunt animals</div></div><button disabled>Eat</button></div>'}
+    <div class="action-row ${canSleep ? "" : "disabled"}">
+      <div>
+        <div>Sleep</div>
+        <div class="panel-meta">${stats?.isNight ? "Night time" : "Only available at night"}${(counts.get("bed") ?? 0) > 0 ? "" : " | bed required"}</div>
+      </div>
+      <button data-action="sleep" ${canSleep ? "" : "disabled"}>Sleep</button>
+    </div>`;
 }
 
 function ensureHudLine(id: string, initialText: string): HTMLElement {
@@ -756,24 +861,16 @@ function ensureHudLine(id: string, initialText: string): HTMLElement {
   return line;
 }
 
-function toBlockCounts(entries: InventoryEntry[]): Map<number, number> {
-  const map = new Map<number, number>();
-  for (const entry of entries) {
-    switch (entry.itemId) {
-      case "cobblestone":
-        map.set(1, entry.count);
-        break;
-      case "dirt":
-        map.set(2, entry.count);
-        break;
-      case "sand":
-        map.set(4, entry.count);
-        break;
-      default:
-        break;
-    }
-  }
-  return map;
+function inventoryCounts(entries: InventoryEntry[]): Map<InventoryEntry["itemId"], number> {
+  return new Map(entries.map((entry) => [entry.itemId, entry.count]));
+}
+
+function preferredFuel(entries: InventoryEntry[]): InventoryEntry["itemId"] | null {
+  const counts = inventoryCounts(entries);
+  if ((counts.get("coal") ?? 0) > 0) return "coal";
+  if ((counts.get("log") ?? 0) > 0) return "log";
+  if ((counts.get("planks") ?? 0) > 0) return "planks";
+  return null;
 }
 
 function saveState(state: SavedState) {

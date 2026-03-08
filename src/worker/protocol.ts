@@ -77,6 +77,21 @@ export interface SetBlockMsg {
   blockType: number;
 }
 
+export interface BreakBlockMsg {
+  type: "BREAK_BLOCK";
+  worldX: number;
+  worldY: number;
+  worldZ: number;
+}
+
+export interface PlaceItemMsg {
+  type: "PLACE_ITEM";
+  worldX: number;
+  worldY: number;
+  worldZ: number;
+  itemId: ItemId;
+}
+
 export interface TickMsg {
   type: "TICK";
   dt: number;
@@ -112,6 +127,11 @@ export interface CollectItemMsg {
   count: number;
 }
 
+export interface ConsumeItemMsg {
+  type: "CONSUME_ITEM";
+  itemId: ItemId;
+}
+
 export interface SleepMsg {
   type: "SLEEP";
 }
@@ -129,12 +149,15 @@ export type MainToWorker =
   | InitMsg
   | GenerateChunkMsg
   | SetBlockMsg
+  | BreakBlockMsg
+  | PlaceItemMsg
   | TickMsg
   | CraftMsg
   | SmeltStartMsg
   | SmeltCollectMsg
   | InteractEntityMsg
   | CollectItemMsg
+  | ConsumeItemMsg
   | SleepMsg
   | LoadStateMsg
   | RequestStateMsg;

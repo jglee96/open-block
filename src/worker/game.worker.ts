@@ -1,4 +1,11 @@
-import { getRecipe, type ItemId } from "../gameplay/items";
+import {
+  BLOCK_TYPE,
+  getEdibleHunger,
+  getHarvestRule,
+  getPlaceableBlockType,
+  getRecipe,
+  type ItemId,
+} from "../gameplay/items";
 import type {
   EntitySnapshot,
   MainToWorker,
@@ -9,6 +16,7 @@ import type {
 } from "./protocol";
 
 const CHUNK_SIZE = 16;
+const CHUNK_HEIGHT = 64;
 const SAVE_STATE_VERSION = 1 as const;
 const DAY_LENGTH_TICKS = 24_000;
 const FULL_DAY_SECONDS = 600;
@@ -88,6 +96,20 @@ self.onmessage = async (e: MessageEvent<MainToWorker>) => {
         break;
       }
 
+      case "BREAK_BLOCK": {
+        if (!initialized) break;
+        breakBlock(msg.worldX, msg.worldY, msg.worldZ);
+        broadcastGameplay(true);
+        break;
+      }
+
+      case "PLACE_ITEM": {
+        if (!initialized) break;
+        placeItem(msg.worldX, msg.worldY, msg.worldZ, msg.itemId);
+        broadcastGameplay(true);
+        break;
+      }
+
       case "TICK": {
         if (!initialized) break;
         latestPlayerPos = msg.playerPos;
@@ -128,6 +150,13 @@ self.onmessage = async (e: MessageEvent<MainToWorker>) => {
       case "COLLECT_ITEM": {
         if (!initialized) break;
         addItem(msg.itemId, msg.count);
+        broadcastGameplay(true);
+        break;
+      }
+
+      case "CONSUME_ITEM": {
+        if (!initialized) break;
+        consumeItem(msg.itemId);
         broadcastGameplay(true);
         break;
       }
@@ -248,10 +277,6 @@ function remeshTouchedChunks(worldX: number, worldZ: number) {
 
 function hydrateDefaultState() {
   inventory.clear();
-  addItem("log", 3);
-  addItem("coal", 2);
-  addItem("raw_meat", 1);
-  addItem("cobblestone", 8);
   stats.health = 20;
   stats.hunger = 20;
   stats.timeOfDay = 6_000;
@@ -285,9 +310,24 @@ function inventoryEntries() {
     .map(([itemId, count]) => ({ itemId, count }));
 }
 
+function hasCraftingTableAccess(): boolean {
+  return hasItem("crafting_table", 1);
+}
+
+function hasRequiredTool(blockType: number): boolean {
+  const rule = getHarvestRule(blockType);
+  if (!rule) return false;
+  if (rule.requiresTool === "none") return true;
+  if (rule.requiresTool === "wooden_pickaxe") {
+    return hasItem("wooden_pickaxe", 1) || hasItem("stone_pickaxe", 1);
+  }
+  return false;
+}
+
 function craft(recipeId: string, quantity: number) {
   const recipe = getRecipe(recipeId as never);
   if (!recipe) return;
+  if (recipe.requiresCraftingTable && !hasCraftingTableAccess()) return;
 
   const safeQty = Math.max(1, Math.floor(quantity));
   for (let i = 0; i < safeQty; i++) {
@@ -303,6 +343,62 @@ function craft(recipeId: string, quantity: number) {
       addItem(itemId as ItemId, count);
     }
   }
+}
+
+function ensureChunkGenerated(cx: number, cz: number) {
+  const world = getWorld();
+  if (!world.get_chunk_blocks(cx, cz)) {
+    world.build_chunk_mesh(cx, cz);
+  }
+}
+
+function getBlockTypeAtWorld(wx: number, wy: number, wz: number): number {
+  if (wy < 0 || wy >= CHUNK_HEIGHT) return BLOCK_TYPE.air;
+  const { cx, cz } = chunkCoordsFromWorld(wx, wz);
+  ensureChunkGenerated(cx, cz);
+  const chunk = getWorld().get_chunk_blocks(cx, cz);
+  if (!chunk) return BLOCK_TYPE.air;
+  const lx = ((wx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+  const lz = ((wz % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+  const idx = wy * CHUNK_SIZE * CHUNK_SIZE + lz * CHUNK_SIZE + lx;
+  return chunk[idx] ?? BLOCK_TYPE.air;
+}
+
+function breakBlock(worldX: number, worldY: number, worldZ: number) {
+  const blockType = getBlockTypeAtWorld(worldX, worldY, worldZ);
+  const rule = getHarvestRule(blockType);
+  if (!rule || !rule.breakableByHand && !hasRequiredTool(blockType)) return;
+  if (rule.breakableByHand === false && !hasRequiredTool(blockType)) return;
+  if (blockType === BLOCK_TYPE.air || blockType === BLOCK_TYPE.bedrock) return;
+
+  const world = getWorld();
+  world.set_block(worldX, worldY, worldZ, BLOCK_TYPE.air);
+  setBlockOverride(worldX, worldY, worldZ, BLOCK_TYPE.air);
+  remeshTouchedChunks(worldX, worldZ);
+
+  if (rule.drops) {
+    addItem(rule.drops, 1);
+  }
+}
+
+function placeItem(worldX: number, worldY: number, worldZ: number, itemId: ItemId) {
+  const blockType = getPlaceableBlockType(itemId);
+  if (blockType === null) return;
+  if (!hasItem(itemId, 1)) return;
+  if (getBlockTypeAtWorld(worldX, worldY, worldZ) !== BLOCK_TYPE.air) return;
+
+  const world = getWorld();
+  world.set_block(worldX, worldY, worldZ, blockType);
+  setBlockOverride(worldX, worldY, worldZ, blockType);
+  removeItem(itemId, 1);
+  remeshTouchedChunks(worldX, worldZ);
+}
+
+function consumeItem(itemId: ItemId) {
+  const hungerGain = getEdibleHunger(itemId);
+  if (hungerGain <= 0) return;
+  if (!removeItem(itemId, 1)) return;
+  stats.hunger = clamp(stats.hunger + hungerGain, 0, stats.maxHunger);
 }
 
 function startSmelting(inputItem: ItemId, fuelItem: ItemId) {

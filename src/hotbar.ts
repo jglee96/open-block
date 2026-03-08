@@ -1,39 +1,56 @@
-/** BlockType values matching Rust's BlockType enum */
-const HOTBAR_BLOCKS: { type: number; name: string; color: string }[] = [
-  { type: 1, name: "Stone",   color: "#808080" },
-  { type: 2, name: "Dirt",    color: "#8c5e35" },
-  { type: 3, name: "Grass",   color: "#4da633" },
-  { type: 4, name: "Sand",    color: "#eded99" },
-  { type: 5, name: "Water",   color: "#3373d9" },
-  { type: 6, name: "Snow",    color: "#f2f7ff" },
-  { type: 7, name: "Bedrock", color: "#262626" },
-  { type: 1, name: "Stone",   color: "#808080" },
-  { type: 2, name: "Dirt",    color: "#8c5e35" },
-];
+import {
+  HOTBAR_ITEMS,
+  PLACEABLE_ITEM_COLORS,
+  type ItemId,
+  type PlaceableItemId,
+} from "./gameplay/items";
+import type { InventoryEntry } from "./worker/protocol";
+
+function countByItem(entries: InventoryEntry[]): Map<ItemId, number> {
+  return new Map(entries.map((entry) => [entry.itemId, entry.count]));
+}
 
 export class HotbarManager {
   private selectedIndex = 0;
   private slots: HTMLElement[] = [];
+  private counts = new Map<ItemId, number>();
 
   constructor() {
     this.buildDOM();
     this.bindKeys();
   }
 
-  get selectedBlockType(): number {
-    return HOTBAR_BLOCKS[this.selectedIndex].type;
+  get selectedItemId(): PlaceableItemId | null {
+    return HOTBAR_ITEMS[this.selectedIndex];
   }
 
-  get selectedBlockName(): string {
-    return HOTBAR_BLOCKS[this.selectedIndex].name;
+  get selectedItemName(): string {
+    return this.selectedItemId ? this.selectedItemId.replace("_", " ") : "empty";
   }
 
-  setBlockCounts(blockCounts: Map<number, number>) {
-    this.slots.forEach((slot, i) => {
-      const blockType = HOTBAR_BLOCKS[i].type;
-      const count = blockCounts.get(blockType) ?? 0;
+  getSelectedCount(): number {
+    const itemId = this.selectedItemId;
+    return itemId ? this.counts.get(itemId) ?? 0 : 0;
+  }
+
+  syncInventory(entries: InventoryEntry[]) {
+    this.counts = countByItem(entries);
+    this.slots.forEach((slot, index) => {
+      const itemId = HOTBAR_ITEMS[index];
       const countEl = slot.querySelector(".slot-count") as HTMLElement | null;
+      const nameEl = slot.querySelector(".slot-name") as HTMLElement | null;
+      if (!itemId) {
+        slot.classList.add("empty");
+        if (countEl) countEl.textContent = "";
+        if (nameEl) nameEl.textContent = "";
+        return;
+      }
+
+      slot.classList.remove("empty");
+      const count = this.counts.get(itemId) ?? 0;
       if (countEl) countEl.textContent = count > 0 ? `${count}` : "";
+      if (nameEl) nameEl.textContent = itemId.replace("_", " ");
+      slot.classList.toggle("depleted", count === 0);
     });
   }
 
@@ -41,11 +58,18 @@ export class HotbarManager {
     const hotbar = document.getElementById("hotbar");
     if (!hotbar) return;
 
-    HOTBAR_BLOCKS.forEach((block, i) => {
-      const slot = hotbar.children[i] as HTMLElement | undefined;
+    HOTBAR_ITEMS.forEach((itemId, index) => {
+      const slot = hotbar.children[index] as HTMLElement | undefined;
       if (!slot) return;
-      slot.style.setProperty("--block-color", block.color);
-      slot.querySelector(".slot-name")!.textContent = block.name;
+
+      const color = itemId ? PLACEABLE_ITEM_COLORS[itemId] ?? "#666" : "#222";
+      slot.style.setProperty("--block-color", color);
+      slot.dataset.itemId = itemId ?? "";
+
+      const nameEl = slot.querySelector(".slot-name") as HTMLElement | null;
+      if (nameEl) {
+        nameEl.textContent = itemId ? itemId.replace("_", " ") : "";
+      }
 
       const countEl = document.createElement("span");
       countEl.className = "slot-count";
@@ -65,27 +89,32 @@ export class HotbarManager {
   }
 
   private select(index: number) {
-    this.selectedIndex = ((index % 9) + 9) % 9;
+    this.selectedIndex = ((index % HOTBAR_ITEMS.length) + HOTBAR_ITEMS.length) % HOTBAR_ITEMS.length;
     this.updateSelection();
   }
 
   private updateSelection() {
-    this.slots.forEach((slot, i) => {
-      slot.classList.toggle("selected", i === this.selectedIndex);
+    this.slots.forEach((slot, index) => {
+      slot.classList.toggle("selected", index === this.selectedIndex);
     });
   }
 
   private bindKeys() {
     document.addEventListener("keydown", (e) => {
-      if (e.code.startsWith("Digit")) {
-        const n = parseInt(e.code.replace("Digit", ""), 10);
-        if (n >= 1 && n <= 9) this.select(n - 1);
+      if (!e.code.startsWith("Digit")) return;
+      const number = Number.parseInt(e.code.replace("Digit", ""), 10);
+      if (number >= 1 && number <= HOTBAR_ITEMS.length) {
+        this.select(number - 1);
       }
     });
 
-    document.addEventListener("wheel", (e) => {
-      e.preventDefault();
-      this.select(this.selectedIndex + (e.deltaY > 0 ? 1 : -1));
-    }, { passive: false });
+    document.addEventListener(
+      "wheel",
+      (e) => {
+        e.preventDefault();
+        this.select(this.selectedIndex + (e.deltaY > 0 ? 1 : -1));
+      },
+      { passive: false },
+    );
   }
 }
