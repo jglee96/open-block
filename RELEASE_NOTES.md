@@ -54,7 +54,8 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 - [x] Done: open inventory and craft first tools from UI
 - [x] Done: place gathered blocks from hotbar/inventory counts
 - [ ] Partial: first-night shelter loop (manual building + sleep item)
-- [ ] Missing: explicit step-by-step onboarding/tutorial prompts
+- [ ] Partial: contextual next-step onboarding hints
+- [ ] Missing: milestone-driven checklist UI with explicit completion tracking
 
 ### Resource gathering & mining
 - [x] Done: hand-break basic surface blocks and logs
@@ -141,6 +142,34 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 1. Add entity renderer and culling for visible feedback parity.
 2. Add crop-specific rendering so the farming loop is less placeholder-like.
 3. Add device-lost recovery state replay tests.
+
+## [2026-03-08 22:35 KST] Tutorial Hint Pass
+### Goal
+- Make the survival loop legible in-game so the tutorial-based progression remains discoverable without external keybind notes.
+
+### Completed
+- Added contextual tutorial hints that react to inventory, tools, furnace state, hunger pressure, and night-time bed availability.
+- Updated the initial ready-state message to explicitly point players at `E` for the inventory and crafting flow.
+- Moved onboarding logic into a small gameplay helper so UI text stays derived from actual progression state instead of hard-coded strings.
+
+### Changed Files
+- `RELEASE_NOTES.md`
+- `src/gameplay/tutorial.ts`
+- `src/main.ts`
+- `src/ui/game-ui.ts`
+
+### Verification
+- Command: `npm run build`
+- Result: pending
+
+### Risks / Known Issues
+- Hints are intentionally single-step and priority-ordered; they do not yet show a persistent checklist or completed milestones.
+- The hint system is inventory-driven, so it can only infer progress, not explain spatial tasks like "build a 3-block-high wall" with precision.
+
+### Next Actions
+1. Promote tutorial hints into a visible checklist panel with completed milestone markers.
+2. Add crop-specific rendering so farm progress reads clearly from a distance.
+3. Add entity render feedback so breeding and combat state changes are visible in-world.
 
 ## [2026-03-08 22:20 KST] Animal Breeding Pass
 ### Goal

@@ -150,7 +150,7 @@ async function main() {
     workerUrl: new URL("./worker/game.worker.ts", import.meta.url),
     seed: 42,
     onReady: () => {
-      ui.setStatus("Ready — click to start");
+      ui.setStatus("Ready - click to start, press E for inventory");
       const saved = loadState(SAVE_KEY);
       if (saved) workerClient.send({ type: "LOAD_STATE", state: saved });
     },

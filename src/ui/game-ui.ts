@@ -4,6 +4,7 @@ import {
   RECIPES,
   type RecipeId,
 } from "../gameplay/items";
+import { getTutorialHint } from "../gameplay/tutorial";
 import type {
   FrameDiagnostics,
   InventoryEntry,
@@ -74,6 +75,7 @@ export class GameUi {
   private readonly fpsEl: HTMLElement;
   private readonly statsEl: HTMLElement;
   private readonly inventoryEl: HTMLElement;
+  private readonly guideEl: HTMLElement;
   private readonly diagnosticsEl: HTMLElement;
 
   constructor(private readonly elements: GameUiElements) {
@@ -81,6 +83,7 @@ export class GameUi {
     this.fpsEl = ensureHudLine(elements.hud, "fps", "FPS: 0");
     this.statsEl = ensureHudLine(elements.hud, "stats", "HP: 20 | Hunger: 20 | Day");
     this.inventoryEl = ensureHudLine(elements.hud, "inventory", "Inventory: -");
+    this.guideEl = ensureHudLine(elements.hud, "guide", "Guide: Break a tree to collect your first logs.");
     this.diagnosticsEl = ensureHudLine(elements.hud, "diag", "FrameErr(main/worker): 0/0");
   }
 
@@ -165,6 +168,7 @@ export class GameUi {
       ? ` | Smelting: ${model.smelting.inputItem}->${model.smelting.outputItem} (${smeltReady ? "ready" : "running"})`
       : "";
     this.inventoryEl.textContent = `Inventory: ${invPreview} | Food: ${edibleAvailable} | Breed feed: ${breedingAvailable}${smeltLabel}`;
+    this.guideEl.textContent = getTutorialHint(model.inventory, model.stats, model.smelting);
 
     this.diagnosticsEl.textContent =
       `FrameErr(main/worker): ${model.mainDiag.frameErrorCount}/${model.workerDiag.frameErrorCount} | ` +
