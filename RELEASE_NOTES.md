@@ -242,6 +242,35 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 2. Remove legacy `SET_BLOCK` and `COLLECT_ITEM` messages if no remaining callers need them.
 3. Add small TypeScript tests around the new controllers before further refactors.
 
+## [2026-03-08 21:30 KST] Main.ts Decomposition Interaction Pass
+### Goal
+- Continue slimming `src/main.ts` by extracting mouse interaction rules and per-frame gameplay state updates.
+
+### Completed
+- Added `GameplayRuntime` to own per-frame movement, targeting, highlight updates, FPS tracking, and worker tick payload generation.
+- Added `InteractionController` to own break/place/entity interaction rules and hotbar-aware placement checks.
+- Reduced `src/main.ts` to loop orchestration, render submission, and cross-module wiring.
+
+### Changed Files
+- `src/main.ts`
+- `src/app/gameplay-runtime.ts`
+- `src/app/interaction-controller.ts`
+
+### Verification
+- Command: `npm run build`
+- Result: passed
+- Command: `cargo test`
+- Result: passed (6 tests)
+
+### Risks / Known Issues
+- `main.ts` still owns DOM event wiring and render-pass submission, so it remains the highest-change integration point.
+- No TypeScript unit tests yet cover the new runtime/controller modules.
+
+### Next Actions
+1. Remove legacy `SET_BLOCK` and `COLLECT_ITEM` messages from protocol and worker if no code path still requires them.
+2. Add TypeScript tests for `ChunkStreamingController`, `GameplayRuntime` helpers, and `InteractionController`.
+3. Consider an `engine/bootstrap` module so `main.ts` becomes a minimal startup file.
+
 ## Entry Template (copy for each session)
 
 ```md

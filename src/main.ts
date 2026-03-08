@@ -3,13 +3,9 @@ import { PlayerPhysics } from "./physics";
 import { loadState, saveState } from "./app/persistence";
 import { GameWorkerClient } from "./app/game-worker-client";
 import { ChunkStreamingController } from "./app/chunk-streaming";
-import {
-  findBlockTarget,
-  findEntityTarget,
-  pickNearestTarget,
-  wouldOverlapPlayer,
-} from "./app/targeting";
 import { BlockCache } from "./app/block-cache";
+import { GameplayRuntime } from "./app/gameplay-runtime";
+import { InteractionController } from "./app/interaction-controller";
 import { initGpu } from "./renderer/gpu";
 import { HighlightRenderer } from "./renderer/highlight";
 import { InputManager } from "./renderer/input";
@@ -201,6 +197,26 @@ async function main() {
       postToWorker({ type: "GENERATE_CHUNK", chunkX: cx, chunkZ: cz });
     },
   });
+  const gameplayRuntime = new GameplayRuntime({
+    camera,
+    input,
+    physics,
+    blockCache,
+    chunkStreaming,
+    highlight,
+    device,
+    playerFeet,
+    eyeHeight: EYE_HEIGHT,
+    maxInteractDistance: MAX_INTERACT_DIST,
+    chunkSize: CHUNK_SIZE,
+    chunksPerFrame: 5,
+  });
+  const interactionController = new InteractionController({
+    hotbar,
+    playerFeet: gameplayRuntime.getPlayerFeet(),
+    isWorkerReady: () => workerClient.isReady(),
+    postToWorker,
+  });
 
   ui.bindRecipeSelect((recipeId) => {
     if (!workerClient.isReady()) return;
@@ -228,37 +244,8 @@ async function main() {
   });
 
   canvas.addEventListener("mousedown", (event) => {
-    if (!input.locked || !workerClient.isReady() || !targetHit) return;
-    if (event.button === 0) {
-      if (targetHit.kind === "entity") {
-        postToWorker({ type: "INTERACT_ENTITY", entityId: targetHit.entity.id, action: "attack" });
-        return;
-      }
-      postToWorker({
-        type: "BREAK_BLOCK",
-        worldX: targetHit.hit.worldX,
-        worldY: targetHit.hit.worldY,
-        worldZ: targetHit.hit.worldZ,
-      });
-      return;
-    }
-
-    if (event.button === 2) {
-      if (targetHit.kind === "entity") {
-        postToWorker({ type: "INTERACT_ENTITY", entityId: targetHit.entity.id, action: "interact" });
-        return;
-      }
-
-      const selectedItemId = hotbar.selectedItemId;
-      if (!selectedItemId || hotbar.getSelectedCount() <= 0) return;
-
-      const px = targetHit.hit.worldX + targetHit.hit.faceNormal[0];
-      const py = targetHit.hit.worldY + targetHit.hit.faceNormal[1];
-      const pz = targetHit.hit.worldZ + targetHit.hit.faceNormal[2];
-      if (wouldOverlapPlayer(px, py, pz, playerFeet)) return;
-
-      postToWorker({ type: "PLACE_ITEM", worldX: px, worldY: py, worldZ: pz, itemId: selectedItemId });
-    }
+    if (!input.locked) return;
+    interactionController.handleMouseDown(event.button, targetHit);
   });
 
   canvas.addEventListener("contextmenu", (event) => event.preventDefault());
@@ -316,83 +303,20 @@ async function main() {
     return viewProj;
   }
 
-  let lastTime = performance.now();
-  let tickAccumulator = 0;
-  let fpsCounter = 0;
-  let fpsElapsed = 0;
-  let fpsValue = 0;
-
   function frame() {
     const now = performance.now();
-    const dt = Math.min((now - lastTime) / 1000, 0.05);
-    lastTime = now;
 
     try {
-      if (input.locked) {
-        const { dx, dy } = input.consumeDelta();
-        camera.yaw += dx;
-        camera.pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, camera.pitch - dy));
+      const step = gameplayRuntime.step(now, entitySnapshots, workerClient.isReady());
+      targetHit = step.targetHit;
 
-        physics.tick(playerFeet, camera.yaw, input.keys, dt, blockCache.isSolid.bind(blockCache));
-        camera.position[0] = playerFeet[0];
-        camera.position[1] = playerFeet[1] + EYE_HEIGHT;
-        camera.position[2] = playerFeet[2];
-
-        if (workerClient.isReady()) {
-          chunkStreaming.updateFocus(camera.position[0], camera.position[2], CHUNK_SIZE);
-          chunkStreaming.flush(5);
-        }
-
-        const blockTarget = findBlockTarget(
-          camera,
-          MAX_INTERACT_DIST,
-          blockCache.isSolid.bind(blockCache),
-          blockCache.getBlockTypeAt.bind(blockCache),
-        );
-        const entityTarget = findEntityTarget(camera, entitySnapshots, MAX_INTERACT_DIST);
-        targetHit = pickNearestTarget(blockTarget, entityTarget);
-
-        if (targetHit?.kind === "block") {
-          highlight.setTarget(device, {
-            minX: targetHit.hit.worldX,
-            minY: targetHit.hit.worldY,
-            minZ: targetHit.hit.worldZ,
-            maxX: targetHit.hit.worldX + 1,
-            maxY: targetHit.hit.worldY + 1,
-            maxZ: targetHit.hit.worldZ + 1,
-          });
-        } else if (targetHit?.kind === "entity") {
-          const entity = targetHit.entity;
-          highlight.setTarget(device, {
-            minX: entity.position.x - entity.radius,
-            minY: entity.position.y,
-            minZ: entity.position.z - entity.radius,
-            maxX: entity.position.x + entity.radius,
-            maxY: entity.position.y + entity.halfHeight * 2,
-            maxZ: entity.position.z + entity.radius,
-          });
-        } else {
-          highlight.setTarget(device, null);
-        }
-
-        tickAccumulator += dt;
-        if (workerClient.isReady() && tickAccumulator >= 0.05) {
-          postToWorker({
-            type: "TICK",
-            dt: tickAccumulator,
-            playerPos: { x: camera.position[0], y: camera.position[1], z: camera.position[2] },
-            isSheltered: isPlayerSheltered(camera.position[0], camera.position[1], camera.position[2], blockCache),
-          });
-          tickAccumulator = 0;
-        }
-      }
-
-      fpsCounter += 1;
-      fpsElapsed += dt;
-      if (fpsElapsed >= 0.25) {
-        fpsValue = fpsCounter / fpsElapsed;
-        fpsCounter = 0;
-        fpsElapsed = 0;
+      if (step.tickPayload) {
+        postToWorker({
+          type: "TICK",
+          dt: step.tickPayload.dt,
+          playerPos: step.tickPayload.playerPos,
+          isSheltered: step.tickPayload.isSheltered,
+        });
       }
 
       const viewProj = uploadUniforms();
@@ -423,7 +347,7 @@ async function main() {
 
       ui.renderHud({
         target: targetHit,
-        fps: fpsValue,
+        fps: step.fps,
         stats: playerStats,
         inventory: inventoryEntries,
         smelting: smeltingState,
@@ -446,10 +370,6 @@ async function main() {
   }
 
   requestAnimationFrame(frame);
-}
-
-function isPlayerSheltered(x: number, y: number, z: number, blockCache: BlockCache): boolean {
-  return blockCache.isSolid(x, y + 0.4, z) || blockCache.isSolid(x, y + 1.0, z) || blockCache.isSolid(x, y + 1.8, z);
 }
 
 function normalise3(v: [number, number, number]): [number, number, number] {
