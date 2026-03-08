@@ -72,7 +72,7 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 - [x] Done: hunger drain and food consumption
 - [x] Done: raw vs cooked meat hunger recovery
 - [ ] Partial: manual smelting with limited fuel/input set
-- [ ] Missing: renewable food sources and crop loop
+- [ ] Partial: renewable food sources and crop loop
 
 ### Shelter / night / combat
 - [x] Done: day/night state and hostile night pressure
@@ -85,7 +85,8 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 - [ ] Missing: biome-driven progression goals, villages, structures
 
 ### Farming / renewable food
-- [ ] Missing: crops, seeds, water-based farming, animal breeding
+- [ ] Partial: crops and seeds
+- [ ] Missing: water-based farming, animal breeding
 
 ### Advanced progression
 - [ ] Missing: armor, durability, ore tiers beyond stone
@@ -116,6 +117,7 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 - Survival progression now starts from empty inventory instead of seeded resources.
 - Block breaking, drops, and block placement are validated in the worker rather than the client.
 - Hotbar now reflects inventory-backed placeable items only.
+- Basic crop growth and bread crafting extend the food loop beyond mob drops.
 
 ### Fixed
 - Guarded render path against invalid target coordinates and frame exceptions that could cause black-screen behavior.
@@ -130,10 +132,11 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 - Entity visuals are logic-synced, but no dedicated entity mesh renderer yet.
 - Survival systems are intentionally simplified and need balancing.
 - Crafting table, furnace, and bed are inventory-state abstractions rather than placed world blocks.
+- Farming is intentionally minimal: no hydration, hoes, or breeding yet.
 
 ### Next Priority
 1. Add entity renderer and culling for visible feedback parity.
-2. Add renewable food / farming loop so hunger progression does not rely only on mob drops.
+2. Add water/hoe-aware farming and breeding so the food loop is less placeholder-like.
 3. Add device-lost recovery state replay tests.
 
 ## [2026-03-08 20:55 KST] Tutorial Coverage Checklist + Phase 1 Survival Loop
@@ -270,6 +273,42 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 1. Remove legacy `SET_BLOCK` and `COLLECT_ITEM` messages from protocol and worker if no code path still requires them.
 2. Add TypeScript tests for `ChunkStreamingController`, `GameplayRuntime` helpers, and `InteractionController`.
 3. Consider an `engine/bootstrap` module so `main.ts` becomes a minimal startup file.
+
+## [2026-03-08 21:45 KST] Renewable Food Loop Pass
+### Goal
+- Continue gameplay implementation by adding a basic renewable food source so hunger progression no longer depends only on mob drops.
+
+### Completed
+- Added `wheat_seeds`, `wheat`, and `bread` items plus bread crafting and food values.
+- Added farmland and staged wheat crop blocks, including seed planting from the hotbar, timed crop growth, and mature crop harvesting.
+- Added grass seed drops and crop save/load persistence so farming survives normal world snapshots.
+- Updated solidity/opacity rules so crop blocks do not behave like full collision cubes.
+
+### Changed Files
+- `src/gameplay/items.ts`
+- `src/hotbar.ts`
+- `src/app/block-cache.ts`
+- `src/worker/protocol.ts`
+- `src/worker/game-session.ts`
+- `crates/mc-core/src/block.rs`
+- `RELEASE_NOTES.md`
+
+### Verification
+- Command: `npm run build`
+- Result: passed
+- Command: `cargo test`
+- Result: passed (6 tests)
+- Command: `npm run wasm`
+- Result: passed
+
+### Risks / Known Issues
+- Farming is deliberately simplified: seeds auto-till dirt/grass, crops do not check nearby water, and growth is purely timer-driven.
+- Crop visuals still use cube meshing, so they read as blocky crop columns rather than Minecraft-style cross-plane plants.
+
+### Next Actions
+1. Add hydration/hoe rules and clearer farmland degradation behavior.
+2. Add visual treatment for crops that does not rely on full cube geometry.
+3. Add breeding or another renewable food source to deepen the survival loop.
 
 ## Entry Template (copy for each session)
 

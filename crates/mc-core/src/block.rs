@@ -14,6 +14,11 @@ pub enum BlockType {
     Bedrock = 7,
     Log = 8,
     Leaves = 9,
+    Farmland = 10,
+    WheatCrop0 = 11,
+    WheatCrop1 = 12,
+    WheatCrop2 = 13,
+    WheatCrop3 = 14,
 }
 
 impl BlockType {
@@ -29,11 +34,24 @@ impl BlockType {
             BlockType::Bedrock => [0.15, 0.15, 0.15],
             BlockType::Log     => [0.43, 0.29, 0.16],
             BlockType::Leaves  => [0.18, 0.55, 0.18],
+            BlockType::Farmland => [0.42, 0.28, 0.12],
+            BlockType::WheatCrop0 => [0.35, 0.55, 0.15],
+            BlockType::WheatCrop1 => [0.45, 0.65, 0.18],
+            BlockType::WheatCrop2 => [0.62, 0.72, 0.20],
+            BlockType::WheatCrop3 => [0.82, 0.70, 0.28],
         }
     }
 
     pub fn is_opaque(self) -> bool {
-        !matches!(self, BlockType::Air | BlockType::Water)
+        !matches!(
+            self,
+            BlockType::Air
+                | BlockType::Water
+                | BlockType::WheatCrop0
+                | BlockType::WheatCrop1
+                | BlockType::WheatCrop2
+                | BlockType::WheatCrop3
+        )
     }
 
     pub fn from_u8(v: u8) -> Self {
@@ -47,6 +65,11 @@ impl BlockType {
             7 => BlockType::Bedrock,
             8 => BlockType::Log,
             9 => BlockType::Leaves,
+            10 => BlockType::Farmland,
+            11 => BlockType::WheatCrop0,
+            12 => BlockType::WheatCrop1,
+            13 => BlockType::WheatCrop2,
+            14 => BlockType::WheatCrop3,
             _ => BlockType::Air,
         }
     }

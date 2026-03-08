@@ -9,6 +9,11 @@ export const BLOCK_TYPE = {
   bedrock: 7,
   log: 8,
   leaves: 9,
+  farmland: 10,
+  wheatCrop0: 11,
+  wheatCrop1: 12,
+  wheatCrop2: 13,
+  wheatCrop3: 14,
 } as const;
 
 export type ItemId =
@@ -27,9 +32,13 @@ export type ItemId =
   | "bed"
   | "dirt"
   | "sand"
-  | "snowball";
+  | "snowball"
+  | "wheat_seeds"
+  | "wheat"
+  | "bread";
 
 export type PlaceableItemId = "cobblestone" | "dirt" | "sand" | "log";
+export type HotbarItemId = PlaceableItemId | "wheat_seeds";
 
 export type RecipeId =
   | "planks"
@@ -38,7 +47,8 @@ export type RecipeId =
   | "wooden_pickaxe"
   | "stone_pickaxe"
   | "furnace"
-  | "bed";
+  | "bed"
+  | "bread";
 
 export interface Recipe {
   id: RecipeId;
@@ -82,6 +92,11 @@ export const RECIPES: Recipe[] = [
     outputs: { bed: 1 },
     requiresCraftingTable: true,
   },
+  {
+    id: "bread",
+    inputs: { wheat: 3 },
+    outputs: { bread: 1 },
+  },
 ];
 
 export const BLOCK_DROP_BY_BLOCK_TYPE: Record<number, ItemId | null> = {
@@ -95,6 +110,11 @@ export const BLOCK_DROP_BY_BLOCK_TYPE: Record<number, ItemId | null> = {
   [BLOCK_TYPE.bedrock]: null,
   [BLOCK_TYPE.log]: "log",
   [BLOCK_TYPE.leaves]: null,
+  [BLOCK_TYPE.farmland]: "dirt",
+  [BLOCK_TYPE.wheatCrop0]: null,
+  [BLOCK_TYPE.wheatCrop1]: null,
+  [BLOCK_TYPE.wheatCrop2]: null,
+  [BLOCK_TYPE.wheatCrop3]: null,
 };
 
 export const PLACEABLE_BLOCK_BY_ITEM: Record<PlaceableItemId, number> = {
@@ -104,28 +124,30 @@ export const PLACEABLE_BLOCK_BY_ITEM: Record<PlaceableItemId, number> = {
   log: BLOCK_TYPE.log,
 };
 
-export const HOTBAR_ITEMS: Array<PlaceableItemId | null> = [
+export const HOTBAR_ITEMS: Array<HotbarItemId | null> = [
   "cobblestone",
   "dirt",
   "sand",
   "log",
-  null,
+  "wheat_seeds",
   null,
   null,
   null,
   null,
 ];
 
-export const PLACEABLE_ITEM_COLORS: Partial<Record<PlaceableItemId, string>> = {
+export const PLACEABLE_ITEM_COLORS: Partial<Record<HotbarItemId, string>> = {
   cobblestone: "#808080",
   dirt: "#8c5e35",
   sand: "#eded99",
   log: "#6f4b2a",
+  wheat_seeds: "#7aa83f",
 };
 
 export const EDIBLE_HUNGER_BY_ITEM: Partial<Record<ItemId, number>> = {
   raw_meat: 2,
   cooked_meat: 6,
+  bread: 5,
 };
 
 export const HARVEST_RULES: Record<number, HarvestRule> = {
@@ -144,6 +166,11 @@ export const HARVEST_RULES: Record<number, HarvestRule> = {
   [BLOCK_TYPE.bedrock]: { blockType: BLOCK_TYPE.bedrock, requiresTool: "none", drops: null, breakableByHand: false },
   [BLOCK_TYPE.log]: { blockType: BLOCK_TYPE.log, requiresTool: "none", drops: "log", breakableByHand: true },
   [BLOCK_TYPE.leaves]: { blockType: BLOCK_TYPE.leaves, requiresTool: "none", drops: null, breakableByHand: true },
+  [BLOCK_TYPE.farmland]: { blockType: BLOCK_TYPE.farmland, requiresTool: "none", drops: "dirt", breakableByHand: true },
+  [BLOCK_TYPE.wheatCrop0]: { blockType: BLOCK_TYPE.wheatCrop0, requiresTool: "none", drops: null, breakableByHand: true },
+  [BLOCK_TYPE.wheatCrop1]: { blockType: BLOCK_TYPE.wheatCrop1, requiresTool: "none", drops: null, breakableByHand: true },
+  [BLOCK_TYPE.wheatCrop2]: { blockType: BLOCK_TYPE.wheatCrop2, requiresTool: "none", drops: null, breakableByHand: true },
+  [BLOCK_TYPE.wheatCrop3]: { blockType: BLOCK_TYPE.wheatCrop3, requiresTool: "none", drops: null, breakableByHand: true },
 };
 
 export function getRecipe(recipeId: RecipeId): Recipe | undefined {
@@ -169,4 +196,28 @@ export function isEdibleItem(itemId: ItemId): boolean {
 
 export function getHarvestRule(blockType: number): HarvestRule | null {
   return HARVEST_RULES[blockType] ?? null;
+}
+
+export function isCropBlockType(blockType: number): boolean {
+  return (
+    blockType === BLOCK_TYPE.wheatCrop0 ||
+    blockType === BLOCK_TYPE.wheatCrop1 ||
+    blockType === BLOCK_TYPE.wheatCrop2 ||
+    blockType === BLOCK_TYPE.wheatCrop3
+  );
+}
+
+export function getCropStage(blockType: number): number | null {
+  switch (blockType) {
+    case BLOCK_TYPE.wheatCrop0:
+      return 0;
+    case BLOCK_TYPE.wheatCrop1:
+      return 1;
+    case BLOCK_TYPE.wheatCrop2:
+      return 2;
+    case BLOCK_TYPE.wheatCrop3:
+      return 3;
+    default:
+      return null;
+  }
 }

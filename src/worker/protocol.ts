@@ -54,6 +54,7 @@ export interface SavedState {
   smelting: SmeltingState | null;
   entities: EntitySnapshot[];
   blockOverrides: Array<{ x: number; y: number; z: number; blockType: number }>;
+  cropPlots?: Array<{ x: number; y: number; z: number; stage: number; nextGrowthAtMs: number }>;
 }
 
 // ── Main → Worker ──────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-import { BLOCK_TYPE } from "../gameplay/items";
+import { BLOCK_TYPE, isCropBlockType } from "../gameplay/items";
 
 const CHUNK_SIZE = 16;
 const CHUNK_HEIGHT = 64;
@@ -34,7 +34,7 @@ export class BlockCache {
   isSolid(wx: number, wy: number, wz: number): boolean {
     if (wy < 0) return true;
     const block = this.getBlockTypeAt(wx, wy, wz);
-    return block !== BLOCK_TYPE.air && block !== BLOCK_TYPE.water;
+    return block !== BLOCK_TYPE.air && block !== BLOCK_TYPE.water && !isCropBlockType(block);
   }
 
   evictDistant(centerChunkX: number, centerChunkZ: number, radius: number, onEvict?: (cx: number, cz: number) => void) {

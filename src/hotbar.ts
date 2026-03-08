@@ -2,7 +2,7 @@ import {
   HOTBAR_ITEMS,
   PLACEABLE_ITEM_COLORS,
   type ItemId,
-  type PlaceableItemId,
+  type HotbarItemId,
 } from "./gameplay/items";
 import type { InventoryEntry } from "./worker/protocol";
 
@@ -20,7 +20,7 @@ export class HotbarManager {
     this.bindKeys();
   }
 
-  get selectedItemId(): PlaceableItemId | null {
+  get selectedItemId(): HotbarItemId | null {
     return HOTBAR_ITEMS[this.selectedIndex];
   }
 
