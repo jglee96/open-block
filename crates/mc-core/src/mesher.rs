@@ -52,6 +52,14 @@ impl Mesher {
                     if block == BlockType::Air {
                         continue;
                     }
+                    if Self::is_cross_plant(block) {
+                        Self::push_cross_plant(
+                            &mut verts,
+                            [wx0 + x as f32, y as f32, wz0 + z as f32],
+                            block,
+                        );
+                        continue;
+                    }
                     let color = block.color();
 
                     for (dir, normal, quad) in &FACES {
@@ -123,6 +131,10 @@ impl Mesher {
                 for x in 0..CHUNK_SIZE {
                     let block = chunk.get(x, y, z);
                     if block == BlockType::Air {
+                        continue;
+                    }
+                    if Self::is_cross_plant(block) {
+                        Self::push_cross_plant(&mut verts, [x as f32, y as f32, z as f32], block);
                         continue;
                     }
                     let color = block.color();
@@ -207,6 +219,68 @@ impl Mesher {
         *(ptr.add(32) as *mut f32) = color[2];
         verts.set_len(len + 9);
     }
+
+    fn is_cross_plant(block: BlockType) -> bool {
+        matches!(
+            block,
+            BlockType::WheatCrop0
+                | BlockType::WheatCrop1
+                | BlockType::WheatCrop2
+                | BlockType::WheatCrop3
+        )
+    }
+
+    fn crop_height(block: BlockType) -> f32 {
+        match block {
+            BlockType::WheatCrop0 => 0.35,
+            BlockType::WheatCrop1 => 0.55,
+            BlockType::WheatCrop2 => 0.75,
+            BlockType::WheatCrop3 => 0.95,
+            _ => 1.0,
+        }
+    }
+
+    fn push_cross_plant(verts: &mut Vec<f32>, origin: [f32; 3], block: BlockType) {
+        let color = block.color();
+        let h = Self::crop_height(block);
+        let planes = [
+            (
+                [
+                    [origin[0] + 0.15, origin[1], origin[2] + 0.15],
+                    [origin[0] + 0.15, origin[1] + h, origin[2] + 0.15],
+                    [origin[0] + 0.85, origin[1] + h, origin[2] + 0.85],
+                    [origin[0] + 0.85, origin[1], origin[2] + 0.85],
+                ],
+                [0.707, 0.0, 0.707],
+            ),
+            (
+                [
+                    [origin[0] + 0.85, origin[1], origin[2] + 0.15],
+                    [origin[0] + 0.85, origin[1] + h, origin[2] + 0.15],
+                    [origin[0] + 0.15, origin[1] + h, origin[2] + 0.85],
+                    [origin[0] + 0.15, origin[1], origin[2] + 0.85],
+                ],
+                [-0.707, 0.0, 0.707],
+            ),
+        ];
+
+        for (quad, normal) in planes {
+            for &vi in &[0usize, 1, 2] {
+                Self::push_vertex(verts, quad[vi], normal, color);
+            }
+            for &vi in &[0usize, 2, 3] {
+                Self::push_vertex(verts, quad[vi], normal, color);
+            }
+
+            let back_normal = [-normal[0], -normal[1], -normal[2]];
+            for &vi in &[2usize, 1, 0] {
+                Self::push_vertex(verts, quad[vi], back_normal, color);
+            }
+            for &vi in &[3usize, 2, 0] {
+                Self::push_vertex(verts, quad[vi], back_normal, color);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -256,5 +330,14 @@ mod tests {
         assert!(mesh_air.len() > mesh_solid.len());
         // Air neighbor adds exactly 1 face = 6 verts × 9 floats
         assert_eq!(mesh_air.len() - mesh_solid.len(), 6 * FLOATS_PER_VERTEX);
+    }
+
+    #[test]
+    fn crop_blocks_emit_crossed_quads() {
+        let mut chunk = Chunk::new();
+        chunk.set(8, 8, 8, BlockType::WheatCrop3);
+        let mesh = Mesher::build_mesh(&chunk);
+
+        assert_eq!(mesh.len(), 24 * FLOATS_PER_VERTEX);
     }
 }

@@ -140,7 +140,37 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 
 ### Next Priority
 1. Add entity renderer and culling for visible feedback parity.
-2. Add crop-specific rendering so the farming loop is less placeholder-like.
+2. Add entity feedback for fed/breed-ready animals.
+3. Add device-lost recovery state replay tests.
+
+## [2026-03-08 22:50 KST] Crop Rendering Pass
+### Goal
+- Make farm progress readable in-world by rendering crop stages as plants instead of full cubes.
+
+### Completed
+- Added mesher-side crop rendering that emits crossed plant quads for wheat stages instead of opaque cube faces.
+- Varied crop height by growth stage so early and mature wheat look visually distinct without changing gameplay rules.
+- Added a Rust mesh regression test that fixes the expected crossed-quad vertex count for crop blocks.
+
+### Changed Files
+- `RELEASE_NOTES.md`
+- `crates/mc-core/src/mesher.rs`
+
+### Verification
+- Command: `cargo test`
+- Result: passed (8 tests)
+- Command: `npm run build`
+- Result: passed
+- Command: `npm run wasm`
+- Result: passed
+
+### Risks / Known Issues
+- Crops now read correctly as plants, but there is still no dedicated entity renderer, so livestock state changes remain logic-only.
+- The crossed-plane mesh is intentionally simple and does not yet include sway, texture variation, or instancing.
+
+### Next Actions
+1. Add simple visual feedback for fed/breed-ready animals.
+2. Add a visible checklist panel for tutorial milestone completion.
 3. Add device-lost recovery state replay tests.
 
 ## [2026-03-08 22:35 KST] Tutorial Hint Pass
