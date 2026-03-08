@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Open Block</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body { background: #000; overflow: hidden; }
+      canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+        cursor: none;
+      }
+      #overlay {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        gap: 12px;
+        background: rgba(0,0,0,0.6);
+        color: #fff;
+        font-family: monospace;
+        font-size: 18px;
+        pointer-events: none;
+        user-select: none;
+      }
+      #overlay.hidden { display: none; }
+      #overlay h1 { font-size: 32px; letter-spacing: 2px; }
+      #overlay p  { font-size: 14px; opacity: 0.7; }
+      #crosshair {
+        position: fixed;
+        top: 50%; left: 50%;
+        transform: translate(-50%, -50%);
+        color: white;
+        font-size: 24px;
+        font-family: monospace;
+        pointer-events: none;
+        display: none;
+        text-shadow: 1px 1px 2px black;
+      }
+      #hud {
+        position: fixed;
+        top: 10px; left: 10px;
+        color: #fff;
+        font-family: monospace;
+        font-size: 13px;
+        pointer-events: none;
+        text-shadow: 1px 1px 2px black;
+        display: none;
+      }
+      #hotbar {
+        position: fixed;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: none;
+        gap: 4px;
+        flex-direction: row;
+        user-select: none;
+        pointer-events: none;
+      }
+      #hotbar .slot {
+        width: 50px;
+        height: 50px;
+        background: rgba(0,0,0,0.5);
+        border: 2px solid rgba(255,255,255,0.3);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-end;
+        padding-bottom: 3px;
+        position: relative;
+        border-radius: 3px;
+      }
+      #hotbar .slot::before {
+        content: "";
+        width: 32px;
+        height: 32px;
+        background: var(--block-color, #888);
+        border-radius: 2px;
+        position: absolute;
+        top: 6px;
+      }
+      #hotbar .slot.selected {
+        border-color: #fff;
+        border-width: 3px;
+        background: rgba(255,255,255,0.15);
+      }
+      #hotbar .slot-name {
+        font-family: monospace;
+        font-size: 8px;
+        color: #fff;
+        text-shadow: 1px 1px 1px #000;
+        position: relative;
+        z-index: 1;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="canvas"></canvas>
+    <div id="overlay">
+      <h1>Open Block</h1>
+      <p>Click to start · WASD move · Space jump · 1-9 hotbar · LMB break/attack · RMB place/interact · C/V/B/N/M/K craft · F smelt · G collect · L sleep</p>
+      <p id="status">Initializing WebGPU...</p>
+    </div>
+    <div id="crosshair">+</div>
+    <div id="hud">
+      <div id="pos">Position: 0, 0, 0</div>
+      <div id="chunks">Chunks: 0</div>
+    </div>
+    <div id="hotbar">
+      <div class="slot" data-key="1"><span class="slot-name"></span></div>
+      <div class="slot" data-key="2"><span class="slot-name"></span></div>
+      <div class="slot" data-key="3"><span class="slot-name"></span></div>
+      <div class="slot" data-key="4"><span class="slot-name"></span></div>
+      <div class="slot" data-key="5"><span class="slot-name"></span></div>
+      <div class="slot" data-key="6"><span class="slot-name"></span></div>
+      <div class="slot" data-key="7"><span class="slot-name"></span></div>
+      <div class="slot" data-key="8"><span class="slot-name"></span></div>
+      <div class="slot" data-key="9"><span class="slot-name"></span></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

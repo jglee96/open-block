@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "lib": ["ES2022", "ESNext.Disposable", "DOM", "DOM.Iterable"],
+    "types": ["@webgpu/types"],
+    "paths": {
+      "mc-core": ["./crates/mc-core/pkg/mc_core"]
+    }
+  },
+  "include": ["src"]
+}
