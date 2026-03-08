@@ -28,9 +28,17 @@ export class HotbarManager {
     return this.selectedItemId ? this.selectedItemId.replace("_", " ") : "empty";
   }
 
+  get selectedIndexValue(): number {
+    return this.selectedIndex;
+  }
+
   getSelectedCount(): number {
     const itemId = this.selectedItemId;
     return itemId ? this.counts.get(itemId) ?? 0 : 0;
+  }
+
+  selectIndex(index: number) {
+    this.select(index);
   }
 
   syncInventory(entries: InventoryEntry[]) {

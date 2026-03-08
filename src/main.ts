@@ -50,10 +50,22 @@ declare global {
         playerStats: PlayerStats | null;
         smeltingState: SmeltingState | null;
         entitySnapshots: EntitySnapshot[];
+        targetHit: TargetHit;
+        hotbar: {
+          selectedIndex: number;
+          selectedItemId: string | null;
+          selectedCount: number;
+        };
       };
       requestState: () => void;
       seedSave: (state: SavedState) => void;
       sendToWorker: (msg: MainToWorker) => void;
+      generateChunk: (chunkX: number, chunkZ: number) => void;
+      getBlockTypeAt: (worldX: number, worldY: number, worldZ: number) => number;
+      setPlayerPose: (pose: { x: number; y: number; z: number; yaw?: number; pitch?: number }) => void;
+      selectHotbarIndex: (index: number) => void;
+      sampleTarget: () => TargetHit;
+      interactAtCurrentTarget: (button: number) => boolean;
     };
   }
 }
@@ -221,6 +233,12 @@ async function main() {
         playerStats,
         smeltingState,
         entitySnapshots,
+        targetHit,
+        hotbar: {
+          selectedIndex: hotbar.selectedIndexValue,
+          selectedItemId: hotbar.selectedItemId,
+          selectedCount: hotbar.getSelectedCount(),
+        },
       }),
       requestState: () => {
         if (workerClient.isReady()) postToWorker({ type: "REQUEST_STATE" });
@@ -230,6 +248,26 @@ async function main() {
       },
       sendToWorker: (msg) => {
         if (workerClient.isReady()) postToWorker(msg);
+      },
+      generateChunk: (chunkX, chunkZ) => {
+        if (workerClient.isReady()) postToWorker({ type: "GENERATE_CHUNK", chunkX, chunkZ });
+      },
+      getBlockTypeAt: (worldX, worldY, worldZ) => blockCache.getBlockTypeAt(worldX, worldY, worldZ),
+      setPlayerPose: (pose) => {
+        gameplayRuntime.setPlayerPose(pose);
+      },
+      selectHotbarIndex: (index) => {
+        hotbar.selectIndex(index);
+      },
+      sampleTarget: () => {
+        targetHit = gameplayRuntime.sampleTarget(entitySnapshots);
+        return targetHit;
+      },
+      interactAtCurrentTarget: (button) => {
+        targetHit = gameplayRuntime.sampleTarget(entitySnapshots);
+        if (!targetHit) return false;
+        interactionController.handleMouseDown(button, targetHit);
+        return true;
       },
     };
   }

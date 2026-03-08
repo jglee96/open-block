@@ -100,6 +100,23 @@ export class GameplayRuntime {
     return this.options.playerFeet;
   }
 
+  setPlayerPose(pose: { x: number; y: number; z: number; yaw?: number; pitch?: number }) {
+    this.options.playerFeet[0] = pose.x;
+    this.options.playerFeet[1] = pose.y;
+    this.options.playerFeet[2] = pose.z;
+    this.options.camera.position[0] = pose.x;
+    this.options.camera.position[1] = pose.y + this.options.eyeHeight;
+    this.options.camera.position[2] = pose.z;
+    if (typeof pose.yaw === "number") this.options.camera.yaw = pose.yaw;
+    if (typeof pose.pitch === "number") this.options.camera.pitch = pose.pitch;
+  }
+
+  sampleTarget(entitySnapshots: EntitySnapshot[]): TargetHit {
+    this.targetHit = this.resolveTarget(entitySnapshots);
+    this.updateHighlight();
+    return this.targetHit;
+  }
+
   private updatePlayerView() {
     const { dx, dy } = this.options.input.consumeDelta();
     this.options.camera.yaw += dx;

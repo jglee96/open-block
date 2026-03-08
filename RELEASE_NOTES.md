@@ -134,7 +134,7 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 - 2026-03-08: `npm run build` passed.
 - 2026-03-08: `cargo test` passed (8 tests).
 - 2026-03-08: `npm run wasm` passed.
-- 2026-03-09: `npm run test:e2e` passed (3 Playwright tests).
+- 2026-03-09: `npm run test:e2e` passed (5 Playwright tests).
 
 ### Known Gaps
 - Entity visuals are logic-synced, but no dedicated entity mesh renderer yet.
@@ -146,6 +146,38 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 1. Add entity renderer and culling for visible feedback parity.
 2. Add entity feedback for fed/breed-ready animals.
 3. Add device-lost recovery state replay tests.
+
+## [2026-03-09 01:20 KST] World Interaction E2E Pass
+### Goal
+- Extend the new Playwright harness beyond overlay UI so block break/place and tool-gated mining can be regression-tested through the game interaction path.
+
+### Completed
+- Added E2E debug hooks for camera pose, target sampling, block reads, hotbar selection, chunk generation, and interaction replay.
+- Added Playwright coverage for breaking a targeted world block, switching to the matching hotbar slot, and placing the gathered block back into the world.
+- Added Playwright coverage for stone remaining unbreakable by hand and becoming breakable once a wooden pickaxe is present in worker inventory.
+- Stabilized the stone-tier test setup by loading state directly into the worker instead of reloading through a save race with the `beforeunload` snapshot request.
+
+### Changed Files
+- `RELEASE_NOTES.md`
+- `src/app/gameplay-runtime.ts`
+- `src/hotbar.ts`
+- `src/main.ts`
+- `tests/e2e/game-ui.spec.ts`
+
+### Verification
+- Command: `npm run build`
+- Result: passed
+- Command: `npm run test:e2e`
+- Result: passed (5 tests)
+
+### Risks / Known Issues
+- World interaction coverage still uses explicit camera pose hooks rather than full pointer-lock mouse movement, so free-look regression coverage is not complete yet.
+- Entity interaction flows such as breeding and combat still need direct browser-level automation.
+
+### Next Actions
+1. Add Playwright coverage for breeding and hostile combat interactions.
+2. Add a CI-smoke target that runs the fastest world + UI interaction subset.
+3. Add minimal entity render feedback so those future E2E scenarios have visible state transitions to assert.
 
 ## [2026-03-08 22:50 KST] Crop Rendering Pass
 ### Goal
