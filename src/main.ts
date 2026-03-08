@@ -83,6 +83,7 @@ const inventoryGridEl = document.getElementById("inventory-grid") as HTMLElement
 const recipeListEl = document.getElementById("recipe-list") as HTMLElement;
 const furnacePanelEl = document.getElementById("furnace-panel") as HTMLElement;
 const actionListEl = document.getElementById("action-list") as HTMLElement;
+const checklistListEl = document.getElementById("checklist-list") as HTMLElement;
 
 let depthTexture: GPUTexture | null = null;
 
@@ -110,6 +111,7 @@ async function main() {
     recipeList: recipeListEl,
     furnacePanel: furnacePanelEl,
     actionList: actionListEl,
+    checklistList: checklistListEl,
     pos: posEl,
     chunks: chunksEl,
   });

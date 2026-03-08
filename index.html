@@ -142,7 +142,8 @@
       }
       .inventory-grid,
       .recipe-list,
-      .action-list {
+      .action-list,
+      .checklist-list {
         display: grid;
         gap: 8px;
         min-height: 0;
@@ -156,7 +157,8 @@
         max-height: 32vh;
       }
       #furnace-panel,
-      #action-list {
+      #action-list,
+      #checklist-list {
         max-height: 18vh;
       }
       .inventory-row,
@@ -202,6 +204,27 @@
         align-content: start;
         min-height: 0;
       }
+      .checklist-row {
+        display: grid;
+        gap: 6px;
+        padding: 8px 10px;
+        background: rgba(255,255,255,0.03);
+        border-radius: 8px;
+      }
+      .checklist-row.done {
+        border-left: 3px solid #7aa83f;
+      }
+      .checklist-row.active {
+        border-left: 3px solid #d4b15a;
+      }
+      .checklist-row.todo {
+        border-left: 3px solid rgba(255,255,255,0.15);
+      }
+      .checklist-header {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
     </style>
   </head>
   <body>
@@ -229,6 +252,10 @@
         <section class="panel-card">
           <h2>Actions</h2>
           <div id="action-list" data-testid="action-list" class="action-list"></div>
+        </section>
+        <section class="panel-card">
+          <h2>Checklist</h2>
+          <div id="checklist-list" data-testid="checklist-list" class="checklist-list"></div>
         </section>
       </div>
     </div>

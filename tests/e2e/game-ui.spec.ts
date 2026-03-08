@@ -120,7 +120,31 @@ test("opens inventory overlay and shows tutorial HUD guidance", async ({ page })
 
   await expect(page.getByTestId("inventory-panel")).toBeVisible();
   await expect(page.getByTestId("recipe-list")).toBeVisible();
+  await expect(page.getByTestId("checklist-list")).toContainText("Gather logs");
   await expect(page.getByTestId("hud")).toContainText("Guide:");
+});
+
+test("renders tutorial checklist progress from inventory milestones", async ({ page }) => {
+  await seedSave(
+    page,
+    createState({
+      inventory: [
+        { itemId: "log", count: 1 },
+        { itemId: "planks", count: 4 },
+        { itemId: "stick", count: 4 },
+        { itemId: "crafting_table", count: 1 },
+      ],
+    }),
+  );
+  await waitForReady(page);
+
+  await page.keyboard.press("KeyE");
+
+  const checklist = page.getByTestId("checklist-list");
+  await expect(checklist).toContainText("[x] Gather logs");
+  await expect(checklist).toContainText("[x] Craft planks and sticks");
+  await expect(checklist).toContainText("[x] Unlock crafting table");
+  await expect(checklist).toContainText("[>] Make a pickaxe");
 });
 
 test("crafts first-day progression items through the inventory UI", async ({ page }) => {

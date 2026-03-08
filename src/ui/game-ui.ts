@@ -4,7 +4,7 @@ import {
   RECIPES,
   type RecipeId,
 } from "../gameplay/items";
-import { getTutorialHint } from "../gameplay/tutorial";
+import { getTutorialChecklist, getTutorialHint } from "../gameplay/tutorial";
 import type {
   FrameDiagnostics,
   InventoryEntry,
@@ -24,6 +24,7 @@ interface GameUiElements {
   recipeList: HTMLElement;
   furnacePanel: HTMLElement;
   actionList: HTMLElement;
+  checklistList: HTMLElement;
   pos: HTMLElement;
   chunks: HTMLElement;
 }
@@ -265,5 +266,18 @@ export class GameUi {
         </div>
         <button data-action="sleep" ${canSleep ? "" : "disabled"}>Sleep</button>
       </div>`;
+
+    const checklist = getTutorialChecklist(inventory, stats, smelting);
+    this.elements.checklistList.innerHTML = checklist.map((entry) => {
+      const marker = entry.status === "done" ? "[x]" : entry.status === "active" ? "[>]" : "[ ]";
+      return `
+        <div class="checklist-row ${entry.status}">
+          <div class="checklist-header">
+            <span>${marker}</span>
+            <span>${entry.label}</span>
+          </div>
+          <div class="panel-meta">${entry.detail}</div>
+        </div>`;
+    }).join("");
   }
 }

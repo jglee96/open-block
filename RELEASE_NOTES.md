@@ -54,8 +54,8 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 - [x] Done: open inventory and craft first tools from UI
 - [x] Done: place gathered blocks from hotbar/inventory counts
 - [ ] Partial: first-night shelter loop (manual building + sleep item)
-- [ ] Partial: contextual next-step onboarding hints
-- [ ] Missing: milestone-driven checklist UI with explicit completion tracking
+- [x] Done: contextual next-step onboarding hints
+- [ ] Partial: milestone-driven checklist UI with explicit completion tracking
 
 ### Resource gathering & mining
 - [x] Done: hand-break basic surface blocks and logs
@@ -134,7 +134,7 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 - 2026-03-08: `npm run build` passed.
 - 2026-03-08: `cargo test` passed (8 tests).
 - 2026-03-08: `npm run wasm` passed.
-- 2026-03-09: `npm run test:e2e` passed (7 Playwright tests).
+- 2026-03-09: `npm run test:e2e` passed (8 Playwright tests).
 
 ### Known Gaps
 - Entity visuals are logic-synced, but no dedicated entity mesh renderer yet.
@@ -146,6 +146,39 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 1. Add entity renderer and culling for visible feedback parity.
 2. Add entity feedback for fed/breed-ready animals.
 3. Add device-lost recovery state replay tests.
+
+## [2026-03-09 01:50 KST] Tutorial Checklist UI Pass
+### Goal
+- Turn the tutorial hint system into a visible first-day progression checklist so players can see what is complete, current, and still blocked.
+
+### Completed
+- Added a derived tutorial checklist model with `done`, `active`, and `todo` states based on real inventory, station, tool, food, and farming progression.
+- Added a `Checklist` panel to the inventory overlay so first-day survival milestones remain visible while crafting and managing food.
+- Added Playwright coverage that asserts checklist progression state from seeded inventory milestones.
+- Updated checklist status in release notes: contextual hints are now done, while checklist tracking is partial because completion is still inventory-derived rather than event-driven.
+
+### Changed Files
+- `RELEASE_NOTES.md`
+- `index.html`
+- `src/gameplay/tutorial.ts`
+- `src/main.ts`
+- `src/ui/game-ui.ts`
+- `tests/e2e/game-ui.spec.ts`
+
+### Verification
+- Command: `npm run build`
+- Result: passed
+- Command: `npm run test:e2e`
+- Result: passed (8 tests)
+
+### Risks / Known Issues
+- Checklist progress is inferred from current inventory/state, so it can mark steps as complete without knowing whether the player followed the exact intended sequence.
+- The checklist is confined to the inventory overlay; there is still no compact in-world milestone summary while actively moving around.
+
+### Next Actions
+1. Add compact entity feedback so breeding/combat state is visible without opening debug/test hooks.
+2. Promote checklist tracking from inferred state to milestone events where that distinction matters.
+3. Add device-lost recovery replay coverage alongside the gameplay E2E suite.
 
 ## [2026-03-09 01:35 KST] Entity Interaction E2E Pass
 ### Goal
