@@ -227,6 +227,7 @@ impl Mesher {
                 | BlockType::WheatCrop1
                 | BlockType::WheatCrop2
                 | BlockType::WheatCrop3
+                | BlockType::ShortGrass
         )
     }
 
@@ -236,6 +237,7 @@ impl Mesher {
             BlockType::WheatCrop1 => 0.55,
             BlockType::WheatCrop2 => 0.75,
             BlockType::WheatCrop3 => 0.95,
+            BlockType::ShortGrass => 0.8,
             _ => 1.0,
         }
     }

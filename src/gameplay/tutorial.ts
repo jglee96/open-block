@@ -70,7 +70,7 @@ export function getTutorialChecklist(
       label: "Start a farm",
       done: hasHoe && hasSeeds && hasWheat,
       active: hasHoe || hasSeeds,
-      detail: "Make a hoe, plant seeds near water, and grow wheat.",
+      detail: "Break short grass, till soil near water, and grow wheat.",
     },
     {
       id: "breeding",
@@ -134,7 +134,10 @@ export function getTutorialHint(
     return "Guide: Craft a hoe so you can turn seeds into renewable food.";
   }
   if (hasHoe && (counts.get("wheat_seeds") ?? 0) > 0) {
-    return "Guide: Till grass or dirt near water, then plant your wheat seeds.";
+    return "Guide: Till dirt near water, then plant your wheat seeds.";
+  }
+  if (!hasHoe && (counts.get("wheat_seeds") ?? 0) === 0) {
+    return "Guide: Break short grass near spawn to collect your first seeds.";
   }
   if ((counts.get("wheat") ?? 0) >= 2) {
     return "Guide: Hold wheat and feed two pigs or sheep to breed them.";

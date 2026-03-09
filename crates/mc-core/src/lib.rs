@@ -55,6 +55,10 @@ impl WasmWorld {
             .map(|c| js_sys::Uint8Array::from(c.blocks_raw()))
     }
 
+    pub fn surface_height_at(&self, wx: i32, wz: i32) -> u32 {
+        self.inner.surface_height_at(wx, wz) as u32
+    }
+
     pub fn chunk_size() -> u32 {
         CHUNK_SIZE as u32
     }

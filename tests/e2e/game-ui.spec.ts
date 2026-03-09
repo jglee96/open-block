@@ -5,7 +5,7 @@ import type { SavedState } from "../../src/worker/protocol";
 
 function createState(overrides: Partial<SavedState> = {}): SavedState {
   return {
-    version: 1,
+    version: 2,
     stats: {
       health: 20,
       maxHealth: 20,
@@ -21,6 +21,7 @@ function createState(overrides: Partial<SavedState> = {}): SavedState {
     blockOverrides: [],
     cropPlots: [],
     farmlandPlots: [],
+    droppedItems: [],
     ...overrides,
   };
 }
@@ -60,6 +61,51 @@ async function inventoryCount(page: Page, itemId: string): Promise<number> {
     const entry = entries.find((candidate) => candidate.itemId === targetItemId);
     return entry?.count ?? 0;
   }, itemId);
+}
+
+async function droppedItemCount(page: Page, itemId: string): Promise<number> {
+  return page.evaluate((targetItemId) => {
+    const items = window.__openBlockE2E?.getSnapshot().droppedItems ?? [];
+    return items.filter((candidate) => candidate.itemId === targetItemId).reduce((sum, item) => sum + item.count, 0);
+  }, itemId);
+}
+
+async function beginControl(page: Page) {
+  await page.evaluate(async () => {
+    await window.__openBlockE2E?.beginControl();
+  });
+}
+
+async function movePlayer(
+  page: Page,
+  input: { forward?: boolean; back?: boolean; left?: boolean; right?: boolean; jump?: boolean; durationMs: number },
+) {
+  await page.evaluate(async (nextInput) => {
+    await window.__openBlockE2E?.move(nextInput);
+  }, input);
+}
+
+async function lookPlayer(page: Page, input: { yawDelta?: number; pitchDelta?: number }) {
+  await page.evaluate(async (nextInput) => {
+    await window.__openBlockE2E?.look(nextInput);
+  }, input);
+}
+
+async function advanceWorker(page: Page, playerPos: { x: number; y: number; z: number }, steps = 20, dt = 0.05) {
+  await page.evaluate(async ({ nextPlayerPos, nextSteps, nextDt }) => {
+    for (let index = 0; index < nextSteps; index++) {
+      window.__openBlockE2E?.sendToWorker({
+        type: "TICK",
+        dt: nextDt,
+        playerPos: nextPlayerPos,
+        isSheltered: false,
+      });
+    }
+  }, { nextPlayerPos: playerPos, nextSteps: steps, nextDt: dt });
+}
+
+async function cameraPos(page: Page): Promise<{ x: number; y: number; z: number }> {
+  return page.evaluate(() => window.__openBlockE2E?.getSnapshot().cameraPos ?? { x: 0, y: 0, z: 0 });
 }
 
 async function blockTypeAt(page: Page, worldX: number, worldY: number, worldZ: number): Promise<number> {
@@ -215,7 +261,77 @@ test("smelts meat and consumes the result from the action panel", async ({ page 
     .toBeGreaterThan(8);
 });
 
-test("breaks a targeted block, switches hotbar, and places the gathered block back into the world", async ({ page }) => {
+test("moves with the E2E control path and chops a starter tree", async ({ page }) => {
+  await waitForReady(page);
+  await generateChunk(page, 0, 0);
+
+  const spawn = await page.evaluate(() => window.__openBlockE2E?.getSnapshot().spawn);
+  expect(spawn?.y ?? 0).toBeLessThan(32);
+
+  const startPos = await cameraPos(page);
+  await beginControl(page);
+  await movePlayer(page, { forward: true, durationMs: 420 });
+  await movePlayer(page, { right: true, durationMs: 120 });
+  await lookPlayer(page, { yawDelta: -0.1 });
+  const afterMove = await cameraPos(page);
+  expect(afterMove.z).toBeLessThan(startPos.z - 0.5);
+
+  const targeted = await page.evaluate(() => {
+    const target = window.__openBlockE2E?.sampleTarget();
+    if (!target || target.kind !== "block") return null;
+    return {
+      blockType: target.blockType,
+      worldX: target.hit.worldX,
+      worldY: target.hit.worldY,
+      worldZ: target.hit.worldZ,
+    };
+  });
+  expect(targeted?.blockType).toBe(BLOCK_TYPE.log);
+
+  await page.evaluate(() => window.__openBlockE2E?.interactAtCurrentTarget(0));
+  await expect.poll(() => droppedItemCount(page, "log")).toBe(1);
+
+  await movePlayer(page, { forward: true, durationMs: 520 });
+  await expect.poll(() => inventoryCount(page, "log")).toBe(1);
+});
+
+test("collects seeds from short grass and starts a hydrated crop", async ({ page }) => {
+  await seedSave(
+    page,
+    createState({
+      inventory: [{ itemId: "wooden_hoe", count: 1 }],
+      blockOverrides: [
+        { x: 9, y: 63, z: 8, blockType: BLOCK_TYPE.shortGrass },
+        { x: 9, y: 62, z: 8, blockType: BLOCK_TYPE.grass },
+        { x: 8, y: 62, z: 9, blockType: BLOCK_TYPE.grass },
+        { x: 10, y: 62, z: 9, blockType: BLOCK_TYPE.water },
+      ],
+    }),
+  );
+  await waitForReady(page);
+  await generateChunk(page, 0, 0);
+
+  await page.evaluate(() => {
+    window.__openBlockE2E?.sendToWorker({ type: "BREAK_BLOCK", worldX: 9, worldY: 63, worldZ: 8 });
+  });
+  await expect.poll(() => droppedItemCount(page, "wheat_seeds")).toBe(1);
+  await advanceWorker(page, { x: 9.5, y: 63, z: 8.5 });
+  await expect.poll(() => inventoryCount(page, "wheat_seeds")).toBe(1);
+
+  await page.evaluate(() => {
+    window.__openBlockE2E?.sendToWorker({ type: "TILL_BLOCK", worldX: 8, worldY: 62, worldZ: 9, itemId: "wooden_hoe" });
+  });
+  await expect.poll(() => blockTypeAt(page, 8, 62, 9)).toBe(BLOCK_TYPE.farmland);
+
+  await page.evaluate(() => {
+    window.__openBlockE2E?.sendToWorker({ type: "PLACE_ITEM", worldX: 8, worldY: 63, worldZ: 9, itemId: "wheat_seeds" });
+  });
+  await expect.poll(() => blockTypeAt(page, 8, 63, 9)).toBe(BLOCK_TYPE.wheatCrop0);
+  await advanceWorker(page, { x: 8.5, y: 63, z: 9.5 }, 320);
+  await expect.poll(() => blockTypeAt(page, 8, 63, 9)).toBe(BLOCK_TYPE.wheatCrop1);
+});
+
+test("breaks a targeted block, picks up the drop, switches hotbar, and places it back", async ({ page }) => {
   await seedSave(
     page,
     createState({
@@ -246,7 +362,11 @@ test("breaks a targeted block, switches hotbar, and places the gathered block ba
 
   await page.evaluate(() => window.__openBlockE2E?.interactAtCurrentTarget(0));
   await expect.poll(() => blockTypeAt(page, 8, 63, 6)).toBe(BLOCK_TYPE.air);
+  await expect.poll(() => droppedItemCount(page, "log")).toBe(1);
+  await expect.poll(() => inventoryCount(page, "log")).toBe(0);
+  await advanceWorker(page, { x: 8.5, y: 63.1, z: 6.7 });
   await expect.poll(() => inventoryCount(page, "log")).toBe(1);
+  await expect.poll(() => droppedItemCount(page, "log")).toBe(0);
 
   await page.keyboard.press("Digit4");
   await expect
@@ -314,6 +434,8 @@ test("prevents stone breaking without a pickaxe and allows it once a pickaxe is 
 
   await page.evaluate(() => window.__openBlockE2E?.interactAtCurrentTarget(0));
   await expect.poll(() => blockTypeAt(page, 8, 63, 6)).toBe(BLOCK_TYPE.air);
+  await expect.poll(() => droppedItemCount(page, "cobblestone")).toBe(1);
+  await advanceWorker(page, { x: 8.5, y: 63.1, z: 6.7 });
   await expect.poll(() => inventoryCount(page, "cobblestone")).toBe(1);
 });
 
@@ -358,7 +480,7 @@ test("breeds two sheep when wheat is held and spawns a baby", async ({ page }) =
     .toEqual({ count: 3, babyCount: 1 });
 });
 
-test("kills a pig after repeated attacks and awards meat drops", async ({ page }) => {
+test("kills a pig after repeated attacks and requires pickup for meat drops", async ({ page }) => {
   await seedSave(
     page,
     createState({
@@ -389,5 +511,7 @@ test("kills a pig after repeated attacks and awards meat drops", async ({ page }
       page.evaluate(() => (window.__openBlockE2E?.getSnapshot().entitySnapshots ?? []).some((entity) => entity.id === "pig-a")),
     )
     .toBe(false);
+  await expect.poll(() => droppedItemCount(page, "raw_meat")).toBe(2);
+  await advanceWorker(page, { x: 8.5, y: 62, z: 6.4 });
   await expect.poll(() => inventoryCount(page, "raw_meat")).toBe(2);
 });

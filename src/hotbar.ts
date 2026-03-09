@@ -41,8 +41,16 @@ export class HotbarManager {
     this.select(index);
   }
 
-  syncInventory(entries: InventoryEntry[]) {
+  syncInventory(entries: InventoryEntry[], pickedUpItemId: ItemId | null = null) {
+    const previousSelectedCount = this.getSelectedCount();
+    const previousCounts = this.counts;
     this.counts = countByItem(entries);
+    if (pickedUpItemId && previousSelectedCount <= 0) {
+      const slotIndex = HOTBAR_ITEMS.findIndex((itemId) => itemId === pickedUpItemId);
+      if (slotIndex >= 0 && (previousCounts.get(pickedUpItemId) ?? 0) < (this.counts.get(pickedUpItemId) ?? 0)) {
+        this.select(slotIndex);
+      }
+    }
     this.slots.forEach((slot, index) => {
       const itemId = HOTBAR_ITEMS[index];
       const countEl = slot.querySelector(".slot-count") as HTMLElement | null;

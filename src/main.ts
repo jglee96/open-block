@@ -15,6 +15,7 @@ import { Scene } from "./renderer/scene";
 import type { TargetHit } from "./target";
 import { GameUi, preferredFuel } from "./ui/game-ui";
 import type {
+  DroppedItemSnapshot,
   EntitySnapshot,
   FrameDiagnostics,
   InventoryEntry,
@@ -46,10 +47,13 @@ declare global {
         ready: boolean;
         inventoryOpen: boolean;
         statusText: string;
+        spawn: { x: number; y: number; z: number };
+        cameraPos: { x: number; y: number; z: number };
         inventoryEntries: InventoryEntry[];
         playerStats: PlayerStats | null;
         smeltingState: SmeltingState | null;
         entitySnapshots: EntitySnapshot[];
+        droppedItems: DroppedItemSnapshot[];
         targetHit: TargetHit;
         hotbar: {
           selectedIndex: number;
@@ -63,6 +67,10 @@ declare global {
       generateChunk: (chunkX: number, chunkZ: number) => void;
       getBlockTypeAt: (worldX: number, worldY: number, worldZ: number) => number;
       setPlayerPose: (pose: { x: number; y: number; z: number; yaw?: number; pitch?: number }) => void;
+      beginControl: () => Promise<void>;
+      move: (input: { forward?: boolean; back?: boolean; left?: boolean; right?: boolean; jump?: boolean; durationMs: number }) => Promise<void>;
+      look: (input: { yawDelta?: number; pitchDelta?: number }) => Promise<void>;
+      stop: () => Promise<void>;
       selectHotbarIndex: (index: number) => void;
       sampleTarget: () => TargetHit;
       interactAtCurrentTarget: (button: number) => boolean;
@@ -133,11 +141,13 @@ async function main() {
   let inventoryOpen = false;
 
   let entitySnapshots: EntitySnapshot[] = [];
+  let droppedItemSnapshots: DroppedItemSnapshot[] = [];
   let playerStats: PlayerStats | null = null;
   let inventoryEntries: InventoryEntry[] = [];
   let smeltingState: SmeltingState | null = null;
   let workerDiagnostics: FrameDiagnostics = { frameErrorCount: 0, lastErrorCode: null };
   let targetHit: TargetHit = null;
+  let spawnPoint = { x: 8.5, y: 62, z: 8.5 };
 
   const mainDiagnostics = {
     frameErrorCount: 0,
@@ -152,7 +162,7 @@ async function main() {
     console.error("WebGPU uncaptured error:", event.error.message);
   });
 
-  const playerFeet: [number, number, number] = [8, 62, 8];
+  const playerFeet: [number, number, number] = [spawnPoint.x, spawnPoint.y, spawnPoint.z];
   camera.position[0] = playerFeet[0];
   camera.position[1] = playerFeet[1] + EYE_HEIGHT;
   camera.position[2] = playerFeet[2];
@@ -185,7 +195,14 @@ async function main() {
   const workerClient = new GameWorkerClient({
     workerUrl: new URL("./worker/game.worker.ts", import.meta.url),
     seed: 42,
-    onReady: () => {
+    onReady: (spawn) => {
+      spawnPoint = spawn;
+      playerFeet[0] = spawn.x;
+      playerFeet[1] = spawn.y;
+      playerFeet[2] = spawn.z;
+      camera.position[0] = spawn.x;
+      camera.position[1] = spawn.y + EYE_HEIGHT;
+      camera.position[2] = spawn.z;
       ui.setStatus("Ready - click to start, press E for inventory");
       const saved = loadState(SAVE_KEY);
       if (saved) workerClient.send({ type: "LOAD_STATE", state: saved });
@@ -198,10 +215,14 @@ async function main() {
     onEntitySnapshot: (msg) => {
       entitySnapshots = msg.entities;
     },
+    onDroppedItemSnapshot: (msg) => {
+      droppedItemSnapshots = msg.items;
+      scene.setDroppedItems(msg.items);
+    },
     onInventorySync: (msg) => {
       inventoryEntries = msg.entries;
       smeltingState = msg.smelting;
-      hotbar.syncInventory(inventoryEntries);
+      hotbar.syncInventory(inventoryEntries, msg.pickedUpItemId);
     },
     onPlayerStats: (msg) => {
       playerStats = msg.stats;
@@ -215,6 +236,9 @@ async function main() {
     onErrorMessage: (message) => {
       console.error("Worker error:", message);
     },
+    onStatusMessage: (message) => {
+      ui.setStatus(message);
+    },
     onRestarting: (delayMs) => {
       ui.setStatus(`Worker restarting in ${Math.round(delayMs / 1000)}s...`);
     },
@@ -225,16 +249,35 @@ async function main() {
   };
 
   if (E2E_ENABLED) {
+    const waitForFrames = async (count: number) => {
+      for (let i = 0; i < count; i++) {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      }
+    };
+    const setMovementState = (inputState: { forward?: boolean; back?: boolean; left?: boolean; right?: boolean; jump?: boolean }, pressed: boolean) => {
+      input.setKeyStateForTest("KeyW", pressed && !!inputState.forward);
+      input.setKeyStateForTest("KeyS", pressed && !!inputState.back);
+      input.setKeyStateForTest("KeyA", pressed && !!inputState.left);
+      input.setKeyStateForTest("KeyD", pressed && !!inputState.right);
+      input.setKeyStateForTest("Space", pressed && !!inputState.jump);
+    };
     window.__openBlockE2E = {
       clearSave: () => localStorage.removeItem(SAVE_KEY),
       getSnapshot: () => ({
         ready: workerClient.isReady(),
         inventoryOpen,
         statusText: statusEl.textContent ?? "",
+        spawn: spawnPoint,
+        cameraPos: {
+          x: camera.position[0],
+          y: camera.position[1],
+          z: camera.position[2],
+        },
         inventoryEntries,
         playerStats,
         smeltingState,
         entitySnapshots,
+        droppedItems: droppedItemSnapshots,
         targetHit,
         hotbar: {
           selectedIndex: hotbar.selectedIndexValue,
@@ -257,6 +300,30 @@ async function main() {
       getBlockTypeAt: (worldX, worldY, worldZ) => blockCache.getBlockTypeAt(worldX, worldY, worldZ),
       setPlayerPose: (pose) => {
         gameplayRuntime.setPlayerPose(pose);
+      },
+      beginControl: async () => {
+        input.setLockedForTest(true);
+        inventoryOpen = false;
+        syncChromeVisibility();
+        await waitForFrames(2);
+      },
+      move: async ({ durationMs, ...moveInput }) => {
+        input.setLockedForTest(true);
+        setMovementState(moveInput, true);
+        await new Promise((resolve) => window.setTimeout(resolve, durationMs));
+        setMovementState(moveInput, false);
+        await waitForFrames(2);
+      },
+      look: async ({ yawDelta = 0, pitchDelta = 0 }) => {
+        input.setLockedForTest(true);
+        input.addLookDeltaForTest(yawDelta, pitchDelta);
+        await waitForFrames(2);
+      },
+      stop: async () => {
+        input.clearTestInput();
+        input.setLockedForTest(false);
+        syncChromeVisibility();
+        await waitForFrames(2);
       },
       selectHotbarIndex: (index) => {
         hotbar.selectIndex(index);
@@ -426,7 +493,7 @@ async function main() {
         },
       });
 
-      scene.draw(pass, pipeline);
+      scene.draw(pass, pipeline, now);
       highlight.draw(pass);
       pass.end();
       device.queue.submit([encoder.finish()]);

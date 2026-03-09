@@ -197,7 +197,7 @@ export class GameUi {
     this.lastInventoryPanelKey = nextPanelKey;
 
     this.elements.inventoryGrid.innerHTML = inventory.length === 0
-      ? '<div class="inventory-row empty-state"><span>Inventory empty</span><span>Break a tree to start</span></div>'
+      ? '<div class="inventory-row empty-state"><span>Inventory empty</span><span>Break a tree or short grass to start</span></div>'
       : inventory
           .map((entry) => {
             const edible = isEdibleItem(entry.itemId) ? ` (+${getEdibleHunger(entry.itemId)} hunger)` : "";

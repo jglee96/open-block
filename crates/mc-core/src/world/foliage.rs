@@ -16,15 +16,32 @@ pub fn place_trees(chunk: &mut Chunk, heights: &HeightMap, chunk_x: i32, chunk_z
         }
     }
 
-    if chunk_x == 0 && chunk_z == 0 && !placed_tree {
-        place_tree(chunk, heights, 11, 8, true);
+    if chunk_x == 0 && chunk_z == 0 {
+        placed_tree |= place_tree(chunk, heights, 8, 3, true);
+        placed_tree |= place_tree(chunk, heights, 12, 9, true);
+        if !placed_tree {
+            place_tree(chunk, heights, 11, 8, true);
+        }
     }
+
+    place_short_grass(chunk, heights, chunk_x, chunk_z);
 }
 
 fn should_place_tree(wx: i32, wz: i32) -> bool {
     let mut hash = wx.wrapping_mul(374761393) ^ wz.wrapping_mul(668265263);
     hash = (hash ^ (hash >> 13)).wrapping_mul(1274126177);
     hash.rem_euclid(23) == 0
+}
+
+fn should_place_short_grass(wx: i32, wz: i32) -> bool {
+    let mut hash = wx.wrapping_mul(1103515245) ^ wz.wrapping_mul(12345);
+    hash ^= hash >> 11;
+    let near_spawn = (wx - 8).pow(2) + (wz - 8).pow(2) <= 10_i32.pow(2);
+    if near_spawn {
+        hash.rem_euclid(4) != 0
+    } else {
+        hash.rem_euclid(7) == 0
+    }
 }
 
 fn place_tree(
@@ -75,4 +92,27 @@ fn place_tree(
 
     chunk.set(lx, surface + trunk_height + 2, lz, BlockType::Leaves);
     true
+}
+
+fn place_short_grass(chunk: &mut Chunk, heights: &HeightMap, chunk_x: i32, chunk_z: i32) {
+    for lz in 1..(CHUNK_SIZE - 1) {
+        for lx in 1..(CHUNK_SIZE - 1) {
+            let wx = chunk_x * CHUNK_SIZE as i32 + lx as i32;
+            let wz = chunk_z * CHUNK_SIZE as i32 + lz as i32;
+            if !should_place_short_grass(wx, wz) {
+                continue;
+            }
+            let surface = heights[lz][lx];
+            if surface + 1 >= CHUNK_HEIGHT {
+                continue;
+            }
+            if chunk.get(lx, surface, lz) != BlockType::Grass {
+                continue;
+            }
+            if chunk.get(lx, surface + 1, lz) != BlockType::Air {
+                continue;
+            }
+            chunk.set(lx, surface + 1, lz, BlockType::ShortGrass);
+        }
+    }
 }

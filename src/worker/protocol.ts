@@ -38,6 +38,14 @@ export interface EntitySnapshot {
   loveUntilMs: number | null;
 }
 
+export interface DroppedItemSnapshot {
+  id: string;
+  itemId: ItemId;
+  count: number;
+  position: Vec3;
+  pickupReadyInMs: number;
+}
+
 export interface InventoryEntry {
   itemId: ItemId;
   count: number;
@@ -52,14 +60,34 @@ export interface SmeltingState {
 }
 
 export interface SavedState {
-  version: 1;
+  version: 1 | 2;
   stats: PlayerStats;
   inventory: InventoryEntry[];
   smelting: SmeltingState | null;
   entities: EntitySnapshot[];
   blockOverrides: Array<{ x: number; y: number; z: number; blockType: number }>;
-  cropPlots?: Array<{ x: number; y: number; z: number; stage: number; nextGrowthAtMs: number }>;
-  farmlandPlots?: Array<{ x: number; y: number; z: number; dryAtMs: number | null }>;
+  cropPlots?: Array<{
+    x: number;
+    y: number;
+    z: number;
+    stage: number;
+    nextGrowthAtMs?: number;
+    growthMsRemaining?: number;
+  }>;
+  farmlandPlots?: Array<{
+    x: number;
+    y: number;
+    z: number;
+    dryAtMs?: number | null;
+    dryMsRemaining?: number | null;
+  }>;
+  droppedItems?: Array<{
+    id: string;
+    itemId: ItemId;
+    count: number;
+    position: Vec3;
+    pickupDelayMs?: number;
+  }>;
 }
 
 // ── Main → Worker ──────────────────────────────────────────────────────────
@@ -181,6 +209,7 @@ export type MainToWorker =
 
 export interface ReadyMsg {
   type: "READY";
+  spawn: Vec3;
 }
 
 export interface ChunkMeshMsg {
@@ -198,11 +227,17 @@ export interface InventorySyncMsg {
   type: "INVENTORY_SYNC";
   entries: InventoryEntry[];
   smelting: SmeltingState | null;
+  pickedUpItemId: ItemId | null;
 }
 
 export interface EntitySnapshotMsg {
   type: "ENTITY_SNAPSHOT";
   entities: EntitySnapshot[];
+}
+
+export interface DroppedItemSnapshotMsg {
+  type: "DROPPED_ITEM_SNAPSHOT";
+  items: DroppedItemSnapshot[];
 }
 
 export interface PlayerStatsMsg {
@@ -220,6 +255,11 @@ export interface StateSnapshotMsg {
   state: SavedState;
 }
 
+export interface StatusMsg {
+  type: "STATUS";
+  message: string;
+}
+
 export interface ErrorMsg {
   type: "ERROR";
   message: string;
@@ -230,7 +270,9 @@ export type WorkerToMain =
   | ChunkMeshMsg
   | InventorySyncMsg
   | EntitySnapshotMsg
+  | DroppedItemSnapshotMsg
   | PlayerStatsMsg
   | FrameDiagnosticsMsg
   | StateSnapshotMsg
+  | StatusMsg
   | ErrorMsg;

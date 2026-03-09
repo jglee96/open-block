@@ -14,6 +14,7 @@ export const BLOCK_TYPE = {
   wheatCrop1: 12,
   wheatCrop2: 13,
   wheatCrop3: 14,
+  shortGrass: 15,
 } as const;
 
 export type ItemId =
@@ -132,6 +133,7 @@ export const BLOCK_DROP_BY_BLOCK_TYPE: Record<number, ItemId | null> = {
   [BLOCK_TYPE.wheatCrop1]: null,
   [BLOCK_TYPE.wheatCrop2]: null,
   [BLOCK_TYPE.wheatCrop3]: null,
+  [BLOCK_TYPE.shortGrass]: null,
 };
 
 export const PLACEABLE_BLOCK_BY_ITEM: Record<PlaceableItemId, number> = {
@@ -191,6 +193,7 @@ export const HARVEST_RULES: Record<number, HarvestRule> = {
   [BLOCK_TYPE.wheatCrop1]: { blockType: BLOCK_TYPE.wheatCrop1, requiresTool: "none", drops: null, breakableByHand: true },
   [BLOCK_TYPE.wheatCrop2]: { blockType: BLOCK_TYPE.wheatCrop2, requiresTool: "none", drops: null, breakableByHand: true },
   [BLOCK_TYPE.wheatCrop3]: { blockType: BLOCK_TYPE.wheatCrop3, requiresTool: "none", drops: null, breakableByHand: true },
+  [BLOCK_TYPE.shortGrass]: { blockType: BLOCK_TYPE.shortGrass, requiresTool: "none", drops: null, breakableByHand: true },
 };
 
 export function getRecipe(recipeId: RecipeId): Recipe | undefined {
@@ -227,6 +230,10 @@ export function isCropBlockType(blockType: number): boolean {
   );
 }
 
+export function isPlantBlockType(blockType: number): boolean {
+  return isCropBlockType(blockType) || blockType === BLOCK_TYPE.shortGrass;
+}
+
 export function getCropStage(blockType: number): number | null {
   switch (blockType) {
     case BLOCK_TYPE.wheatCrop0:
@@ -244,4 +251,29 @@ export function getCropStage(blockType: number): number | null {
 
 export function isHoeItem(itemId: ItemId): itemId is ToolItemId {
   return itemId === "wooden_hoe" || itemId === "stone_hoe";
+}
+
+export function getItemRenderColor(itemId: ItemId): [number, number, number] {
+  const hex = PLACEABLE_ITEM_COLORS[itemId as HotbarItemId]
+    ?? ({
+      planks: "#c89b63",
+      stick: "#9e7a49",
+      crafting_table: "#8c6338",
+      furnace: "#6e6e6e",
+      wooden_pickaxe: "#7d5a36",
+      stone_pickaxe: "#707070",
+      raw_meat: "#b85b5b",
+      cooked_meat: "#7e4a2f",
+      coal: "#2e2e2e",
+      wool: "#efefef",
+      bed: "#c93838",
+      bread: "#c69641",
+    } as Partial<Record<ItemId, string>>)[itemId]
+    ?? "#ffffff";
+  const normalized = hex.replace("#", "");
+  const num = Number.parseInt(normalized, 16);
+  const r = ((num >> 16) & 0xff) / 255;
+  const g = ((num >> 8) & 0xff) / 255;
+  const b = (num & 0xff) / 255;
+  return [r, g, b];
 }

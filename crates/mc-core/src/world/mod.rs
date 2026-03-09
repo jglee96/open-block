@@ -8,6 +8,7 @@ use noise::Perlin;
 use crate::block::BlockType;
 use crate::chunk::{Chunk, CHUNK_HEIGHT, CHUNK_SIZE};
 use crate::mesher::Mesher;
+use terrain::{SPAWN_X, SPAWN_Z};
 
 pub struct World {
     chunks: HashMap<(i32, i32), Chunk>,
@@ -36,6 +37,14 @@ impl World {
 
     pub fn get_chunk(&self, chunk_x: i32, chunk_z: i32) -> Option<&Chunk> {
         self.chunks.get(&(chunk_x, chunk_z))
+    }
+
+    pub fn surface_height_at(&self, wx: i32, wz: i32) -> usize {
+        terrain::surface_height_at(&self.noise, wx, wz)
+    }
+
+    pub fn spawn_point(&self) -> (i32, usize, i32) {
+        (SPAWN_X, self.surface_height_at(SPAWN_X, SPAWN_Z) + 1, SPAWN_Z)
     }
 
     pub fn build_chunk_mesh_neighbors(&mut self, cx: i32, cz: i32) -> Vec<f32> {
@@ -119,5 +128,51 @@ mod tests {
         }
 
         assert!(found_water);
+    }
+
+    #[test]
+    fn spawn_zone_is_flat_and_has_resources() {
+        let mut world = World::new(42);
+        let mut min_surface = usize::MAX;
+        let mut max_surface = 0usize;
+        let mut found_water = false;
+        let mut found_short_grass = false;
+        let mut tree_columns = 0usize;
+
+        for cz in -1..=1 {
+            for cx in -1..=1 {
+                world.generate_chunk(cx, cz);
+                for z in 0..CHUNK_SIZE {
+                    for x in 0..CHUNK_SIZE {
+                        let wx = cx * CHUNK_SIZE as i32 + x as i32;
+                        let wz = cz * CHUNK_SIZE as i32 + z as i32;
+                        let dist_sq = (wx - SPAWN_X).pow(2) + (wz - SPAWN_Z).pow(2);
+                        if dist_sq > 24_i32.pow(2) {
+                            continue;
+                        }
+                        let surface = world.surface_height_at(wx, wz);
+                        let chunk = world.get_chunk(cx, cz).unwrap();
+                        if dist_sq <= 8_i32.pow(2) && surface >= terrain::WATER_LEVEL {
+                            min_surface = min_surface.min(surface);
+                            max_surface = max_surface.max(surface);
+                        }
+
+                        for y in surface..=(surface + 2).min(CHUNK_HEIGHT - 1) {
+                            found_water |= chunk.get(x, y, z) == BlockType::Water;
+                        }
+                        if surface + 1 < CHUNK_HEIGHT {
+                            found_short_grass |= chunk.get(x, surface + 1, z) == BlockType::ShortGrass;
+                            let above = chunk.get(x, surface + 1, z);
+                            tree_columns += usize::from(above == BlockType::Log || above == BlockType::Leaves);
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(max_surface - min_surface <= 5);
+        assert!(found_water);
+        assert!(found_short_grass);
+        assert!(tree_columns >= 2);
     }
 }

@@ -4,7 +4,15 @@ use crate::block::BlockType;
 use crate::chunk::{Chunk, CHUNK_HEIGHT, CHUNK_SIZE};
 
 pub type HeightMap = [[usize; CHUNK_SIZE]; CHUNK_SIZE];
-const WATER_LEVEL: usize = 18;
+pub const WATER_LEVEL: usize = 18;
+pub const SPAWN_X: i32 = 8;
+pub const SPAWN_Z: i32 = 8;
+const START_ZONE_INNER_RADIUS: f64 = 24.0;
+const START_ZONE_OUTER_RADIUS: f64 = 48.0;
+const START_ZONE_HEIGHT: f64 = 22.0;
+const POND_X: f64 = 14.0;
+const POND_Z: f64 = 14.0;
+const POND_RADIUS: f64 = 5.5;
 
 pub fn build_height_map(noise: &Perlin, chunk_x: i32, chunk_z: i32) -> HeightMap {
     let mut heights = [[0usize; CHUNK_SIZE]; CHUNK_SIZE];
@@ -16,6 +24,10 @@ pub fn build_height_map(noise: &Perlin, chunk_x: i32, chunk_z: i32) -> HeightMap
         }
     }
     heights
+}
+
+pub fn surface_height_at(noise: &Perlin, wx: i32, wz: i32) -> usize {
+    surface_height(noise, wx as f64, wz as f64)
 }
 
 pub fn fill_chunk_terrain(chunk: &mut Chunk, heights: &HeightMap) {
@@ -45,7 +57,34 @@ fn surface_height(noise: &Perlin, wx: f64, wz: f64) -> usize {
 
     let base = (CHUNK_HEIGHT / 2) as f64;
     let range = (CHUNK_HEIGHT as f64 - 16.0) / 2.0;
-    (base + n * range).clamp(4.0, (CHUNK_HEIGHT - 4) as f64) as usize
+    let noisy_height = base + n * range;
+
+    let dx = wx - SPAWN_X as f64;
+    let dz = wz - SPAWN_Z as f64;
+    let dist = (dx * dx + dz * dz).sqrt();
+    let flatten_weight = radial_weight(dist, START_ZONE_INNER_RADIUS, START_ZONE_OUTER_RADIUS);
+    let flat_noise = noise.get([wx * 0.08 + 100.0, wz * 0.08 - 100.0]) * 1.4;
+    let flat_height = START_ZONE_HEIGHT + flat_noise;
+    let mut blended_height = noisy_height * (1.0 - flatten_weight) + flat_height * flatten_weight;
+
+    let pond_dx = wx - POND_X;
+    let pond_dz = wz - POND_Z;
+    let pond_dist = (pond_dx * pond_dx + pond_dz * pond_dz).sqrt();
+    let pond_weight = radial_weight(pond_dist, 0.0, POND_RADIUS);
+    blended_height = blended_height * (1.0 - pond_weight) + (WATER_LEVEL as f64 - 1.0) * pond_weight;
+
+    blended_height.clamp(4.0, (CHUNK_HEIGHT - 4) as f64) as usize
+}
+
+fn radial_weight(distance: f64, inner: f64, outer: f64) -> f64 {
+    if distance <= inner {
+        return 1.0;
+    }
+    if distance >= outer {
+        return 0.0;
+    }
+    let t = (distance - inner) / (outer - inner);
+    1.0 - (t * t * (3.0 - 2.0 * t))
 }
 
 fn classify_block(surface: usize, y: usize) -> BlockType {

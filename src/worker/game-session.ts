@@ -10,6 +10,7 @@ import {
   type ItemId,
 } from "../gameplay/items";
 import type {
+  DroppedItemSnapshot,
   EntitySnapshot,
   FrameDiagnostics,
   SavedState,
@@ -20,11 +21,17 @@ import type {
 
 const CHUNK_SIZE = 16;
 const CHUNK_HEIGHT = 64;
-const SAVE_STATE_VERSION = 1 as const;
+const SAVE_STATE_VERSION = 2 as const;
 const DAY_LENGTH_TICKS = 24_000;
 const FULL_DAY_SECONDS = 600;
 const NIGHT_START = 13_000;
 const NIGHT_END = 23_000;
+const CROP_GROWTH_MS = 15_000;
+const FARMLAND_DRY_MS = 20_000;
+const ITEM_PICKUP_DELAY_MS = 500;
+const ITEM_PICKUP_RADIUS = 1.35;
+const DEFAULT_SPAWN_X = 8.5;
+const DEFAULT_SPAWN_Z = 8.5;
 
 interface EntityRuntime extends EntitySnapshot {
   vx: number;
@@ -46,14 +53,22 @@ interface CropPlotState {
   y: number;
   z: number;
   stage: number;
-  nextGrowthAtMs: number;
+  growthMsRemaining: number;
 }
 
 interface FarmlandPlotState {
   x: number;
   y: number;
   z: number;
-  dryAtMs: number | null;
+  dryMsRemaining: number | null;
+}
+
+interface DroppedItemRuntime {
+  id: string;
+  itemId: ItemId;
+  count: number;
+  position: Vec3;
+  pickupDelayMs: number;
 }
 
 type WasmWorld = import("mc-core").WasmWorld;
@@ -62,15 +77,19 @@ export class GameSession {
   private wasmWorld: WasmWorld | null = null;
   private initialized = false;
   private nextEntityId = 1;
+  private nextDroppedItemId = 1;
   private readonly inventory = new Map<ItemId, number>();
   private smelting: SmeltingState | null = null;
   private readonly entities: EntityRuntime[] = [];
+  private readonly droppedItems: DroppedItemRuntime[] = [];
   private readonly blockOverrides = new Map<string, { x: number; y: number; z: number; blockType: number }>();
   private readonly cropPlots = new Map<string, CropPlotState>();
   private readonly farmlandPlots = new Map<string, FarmlandPlotState>();
-  private latestPlayerPos: Vec3 = { x: 8, y: 62, z: 8 };
+  private latestPlayerPos: Vec3 = { x: DEFAULT_SPAWN_X, y: 0, z: DEFAULT_SPAWN_Z };
   private lastBroadcastMs = 0;
   private lastStateSnapshotMs = 0;
+  private pendingPickedUpItemId: ItemId | null = null;
+  private queuedStatusMessage: string | null = null;
   private readonly stats = {
     health: 20,
     maxHealth: 20,
@@ -93,8 +112,9 @@ export class GameSession {
     this.wasmWorld = new mcCore.WasmWorld(seed);
     this.initialized = true;
     this.hydrateDefaultState();
+    this.latestPlayerPos = this.getSpawnPosition();
     this.ensureEntityPopulation(this.latestPlayerPos);
-    this.post({ type: "READY" });
+    this.post({ type: "READY", spawn: this.latestPlayerPos });
     this.broadcastGameplay(true);
     this.postStateSnapshot();
   }
@@ -120,7 +140,12 @@ export class GameSession {
   breakBlock(worldX: number, worldY: number, worldZ: number) {
     const blockType = this.getBlockTypeAtWorld(worldX, worldY, worldZ);
     const rule = getHarvestRule(blockType);
-    if (!rule || (!rule.breakableByHand && !this.hasRequiredTool(blockType))) return;
+    if (!rule) return;
+    if (!rule.breakableByHand && !this.hasRequiredTool(blockType)) {
+      this.setStatusMessage("This block needs a pickaxe.");
+      this.broadcastGameplay(true);
+      return;
+    }
     if (blockType === BLOCK_TYPE.air || blockType === BLOCK_TYPE.bedrock) return;
 
     if (isCropBlockType(blockType)) {
@@ -134,9 +159,19 @@ export class GameSession {
     this.setBlockOverride(worldX, worldY, worldZ, BLOCK_TYPE.air);
     this.remeshTouchedChunks(worldX, worldZ);
 
-    if (rule.drops) this.addItem(rule.drops, 1);
-    if (blockType === BLOCK_TYPE.grass && Math.random() < 0.35) {
-      this.addItem("wheat_seeds", 1);
+    if (rule.drops) {
+      this.spawnDrop(rule.drops, 1, {
+        x: worldX + 0.5,
+        y: worldY + 0.2,
+        z: worldZ + 0.5,
+      });
+    }
+    if (blockType === BLOCK_TYPE.shortGrass && this.shortGrassDropsSeeds(worldX, worldY, worldZ)) {
+      this.spawnDrop("wheat_seeds", 1, {
+        x: worldX + 0.5,
+        y: worldY + 0.1,
+        z: worldZ + 0.5,
+      });
     }
     this.broadcastGameplay(true);
   }
@@ -162,10 +197,22 @@ export class GameSession {
   }
 
   tillBlock(worldX: number, worldY: number, worldZ: number, itemId: ItemId) {
-    if (!isHoeItem(itemId) || !this.hasItem(itemId, 1)) return;
+    if (!isHoeItem(itemId) || !this.hasItem(itemId, 1)) {
+      this.setStatusMessage("Equip a hoe before tilling soil.");
+      this.broadcastGameplay(true);
+      return;
+    }
     const blockType = this.getBlockTypeAtWorld(worldX, worldY, worldZ);
-    if (blockType !== BLOCK_TYPE.dirt && blockType !== BLOCK_TYPE.grass) return;
-    if (this.getBlockTypeAtWorld(worldX, worldY + 1, worldZ) !== BLOCK_TYPE.air) return;
+    if (blockType !== BLOCK_TYPE.dirt && blockType !== BLOCK_TYPE.grass) {
+      this.setStatusMessage("Till dirt or grass blocks to start farming.");
+      this.broadcastGameplay(true);
+      return;
+    }
+    if (this.getBlockTypeAtWorld(worldX, worldY + 1, worldZ) !== BLOCK_TYPE.air) {
+      this.setStatusMessage("Clear the block above before tilling.");
+      this.broadcastGameplay(true);
+      return;
+    }
 
     const world = this.getWorld();
     world.set_block(worldX, worldY, worldZ, BLOCK_TYPE.farmland);
@@ -174,8 +221,11 @@ export class GameSession {
       x: worldX,
       y: worldY,
       z: worldZ,
-      dryAtMs: null,
+      dryMsRemaining: null,
     });
+    if (!this.isFarmlandHydrated(worldX, worldY, worldZ)) {
+      this.setStatusMessage("Dry farmland won't grow crops. Move closer to water.");
+    }
     this.remeshTouchedChunks(worldX, worldZ);
     this.broadcastGameplay(true);
   }
@@ -183,7 +233,10 @@ export class GameSession {
   tick(dt: number, playerPos: Vec3, isSheltered: boolean) {
     this.latestPlayerPos = playerPos;
     this.stats.isSheltered = isSheltered;
-    this.advanceWorld(dt, playerPos);
+    const changed = this.advanceWorld(dt, playerPos);
+    if (changed) {
+      this.broadcastGameplay(true);
+    }
     this.maybeBroadcastGameplay();
   }
 
@@ -261,12 +314,12 @@ export class GameSession {
     }
 
     if (entity.kind === "pig") {
-      this.addItem("raw_meat", entity.isBaby ? 1 : 2);
+      this.spawnDrop("raw_meat", entity.isBaby ? 1 : 2, entity.position);
     } else if (entity.kind === "sheep") {
-      this.addItem("wool", entity.isBaby ? 1 : 2);
-      this.addItem("raw_meat", 1);
+      this.spawnDrop("wool", entity.isBaby ? 1 : 2, entity.position);
+      this.spawnDrop("raw_meat", 1, entity.position);
     } else if (entity.kind === "zombie") {
-      this.addItem("coal", 1);
+      this.spawnDrop("coal", 1, entity.position);
     }
 
     this.entities.splice(idx, 1);
@@ -275,6 +328,7 @@ export class GameSession {
 
   collectItem(itemId: ItemId, count: number) {
     this.addItem(itemId, count);
+    this.pendingPickedUpItemId = itemId;
     this.broadcastGameplay(true);
   }
 
@@ -296,7 +350,7 @@ export class GameSession {
   }
 
   loadState(state: SavedState) {
-    if (state.version !== SAVE_STATE_VERSION) return;
+    if (state.version !== 1 && state.version !== SAVE_STATE_VERSION) return;
 
     this.stats.health = this.clamp(state.stats.health, 0, state.stats.maxHealth);
     this.stats.maxHealth = Math.max(1, state.stats.maxHealth);
@@ -335,13 +389,39 @@ export class GameSession {
 
     this.cropPlots.clear();
     for (const crop of state.cropPlots ?? []) {
-      this.cropPlots.set(this.coordKey(crop.x, crop.y, crop.z), { ...crop });
+      this.cropPlots.set(this.coordKey(crop.x, crop.y, crop.z), {
+        x: crop.x,
+        y: crop.y,
+        z: crop.z,
+        stage: crop.stage,
+        growthMsRemaining: crop.growthMsRemaining ?? Math.max(0, (crop.nextGrowthAtMs ?? 0) - Date.now()),
+      });
     }
 
     this.farmlandPlots.clear();
     for (const plot of state.farmlandPlots ?? []) {
-      this.farmlandPlots.set(this.coordKey(plot.x, plot.y, plot.z), { ...plot });
+      this.farmlandPlots.set(this.coordKey(plot.x, plot.y, plot.z), {
+        x: plot.x,
+        y: plot.y,
+        z: plot.z,
+        dryMsRemaining: plot.dryMsRemaining ?? (plot.dryAtMs === null || plot.dryAtMs === undefined
+          ? null
+          : Math.max(0, plot.dryAtMs - Date.now())),
+      });
     }
+
+    this.droppedItems.length = 0;
+    for (const item of state.droppedItems ?? []) {
+      this.droppedItems.push({
+        id: item.id,
+        itemId: item.itemId,
+        count: item.count,
+        position: item.position,
+        pickupDelayMs: item.pickupDelayMs ?? 0,
+      });
+    }
+    this.nextDroppedItemId = this.computeNextDroppedItemId();
+    this.latestPlayerPos = this.getSpawnPosition();
 
     this.broadcastGameplay(true);
     this.postStateSnapshot();
@@ -431,8 +511,12 @@ export class GameSession {
     this.inventory.clear();
     this.cropPlots.clear();
     this.farmlandPlots.clear();
+    this.droppedItems.length = 0;
     this.entities.length = 0;
     this.nextEntityId = 1;
+    this.nextDroppedItemId = 1;
+    this.pendingPickedUpItemId = null;
+    this.queuedStatusMessage = null;
     this.stats.health = 20;
     this.stats.hunger = 20;
     this.stats.timeOfDay = 6_000;
@@ -496,11 +580,20 @@ export class GameSession {
   }
 
   private plantSeeds(worldX: number, worldY: number, worldZ: number) {
-    if (!this.hasItem("wheat_seeds", 1)) return;
-    if (this.getBlockTypeAtWorld(worldX, worldY, worldZ) !== BLOCK_TYPE.air) return;
+    if (!this.hasItem("wheat_seeds", 1)) {
+      this.setStatusMessage("Break short grass to collect wheat seeds.");
+      return;
+    }
+    if (this.getBlockTypeAtWorld(worldX, worldY, worldZ) !== BLOCK_TYPE.air) {
+      this.setStatusMessage("Seeds need open space above the farmland.");
+      return;
+    }
 
     const soilBlock = this.getBlockTypeAtWorld(worldX, worldY - 1, worldZ);
-    if (soilBlock !== BLOCK_TYPE.farmland) return;
+    if (soilBlock !== BLOCK_TYPE.farmland) {
+      this.setStatusMessage("Plant seeds on farmland, not raw dirt.");
+      return;
+    }
 
     const world = this.getWorld();
     world.set_block(worldX, worldY, worldZ, BLOCK_TYPE.wheatCrop0);
@@ -509,16 +602,19 @@ export class GameSession {
       x: worldX,
       y: worldY - 1,
       z: worldZ,
-      dryAtMs: null,
+      dryMsRemaining: null,
     });
     this.cropPlots.set(this.coordKey(worldX, worldY, worldZ), {
       x: worldX,
       y: worldY,
       z: worldZ,
       stage: 0,
-      nextGrowthAtMs: Date.now() + 15_000,
+      growthMsRemaining: CROP_GROWTH_MS,
     });
     this.removeItem("wheat_seeds", 1);
+    if (!this.isFarmlandHydrated(worldX, worldY - 1, worldZ)) {
+      this.setStatusMessage("This crop needs water within four blocks to grow.");
+    }
     this.remeshTouchedChunks(worldX, worldZ);
   }
 
@@ -531,17 +627,18 @@ export class GameSession {
     this.remeshTouchedChunks(worldX, worldZ);
 
     if (stage >= 3) {
-      this.addItem("wheat", 2);
-      this.addItem("wheat_seeds", 1);
+      this.spawnDrop("wheat", 2, { x: worldX + 0.5, y: worldY + 0.1, z: worldZ + 0.5 });
+      this.spawnDrop("wheat_seeds", 1, { x: worldX + 0.5, y: worldY + 0.1, z: worldZ + 0.5 });
       return;
     }
 
-    this.addItem("wheat_seeds", 1);
+    this.spawnDrop("wheat_seeds", 1, { x: worldX + 0.5, y: worldY + 0.1, z: worldZ + 0.5 });
   }
 
-  private advanceCropGrowth() {
-    const now = Date.now();
+  private advanceCropGrowth(dt: number): boolean {
     const world = this.getWorld();
+    const dtMs = dt * 1000;
+    let changed = false;
 
     for (const farmland of [...this.farmlandPlots.values()]) {
       const cropBlock = this.getBlockTypeAtWorld(farmland.x, farmland.y + 1, farmland.z);
@@ -549,33 +646,39 @@ export class GameSession {
       const hasCrop = isCropBlockType(cropBlock);
 
       if (hydrated) {
-        farmland.dryAtMs = null;
+        farmland.dryMsRemaining = null;
         continue;
       }
 
       if (hasCrop) continue;
-      if (farmland.dryAtMs === null) {
-        farmland.dryAtMs = now + 20_000;
+      if (farmland.dryMsRemaining === null) {
+        farmland.dryMsRemaining = FARMLAND_DRY_MS;
         continue;
       }
-      if (now < farmland.dryAtMs) continue;
+      farmland.dryMsRemaining -= dtMs;
+      if (farmland.dryMsRemaining > 0) continue;
 
       world.set_block(farmland.x, farmland.y, farmland.z, BLOCK_TYPE.dirt);
       this.setBlockOverride(farmland.x, farmland.y, farmland.z, BLOCK_TYPE.dirt);
       this.farmlandPlots.delete(this.coordKey(farmland.x, farmland.y, farmland.z));
       this.remeshTouchedChunks(farmland.x, farmland.z);
+      changed = true;
     }
 
     for (const crop of this.cropPlots.values()) {
-      if (crop.stage >= 3 || now < crop.nextGrowthAtMs) continue;
+      if (crop.stage >= 3) continue;
       if (!this.isFarmlandHydrated(crop.x, crop.y - 1, crop.z)) continue;
+      crop.growthMsRemaining -= dtMs;
+      if (crop.growthMsRemaining > 0) continue;
       crop.stage += 1;
-      crop.nextGrowthAtMs = now + 15_000;
+      crop.growthMsRemaining = CROP_GROWTH_MS;
       const blockType = this.blockTypeForCropStage(crop.stage);
       world.set_block(crop.x, crop.y, crop.z, blockType);
       this.setBlockOverride(crop.x, crop.y, crop.z, blockType);
       this.remeshTouchedChunks(crop.x, crop.z);
+      changed = true;
     }
+    return changed;
   }
 
   private blockTypeForCropStage(stage: number): number {
@@ -595,11 +698,11 @@ export class GameSession {
     if (this.entities.length > 0) return;
 
     const spawn: Array<{ kind: EntityRuntime["kind"]; x: number; y: number; z: number; hostile: boolean }> = [
-      { kind: "sheep", x: playerPos.x + 3, y: 62, z: playerPos.z - 4, hostile: false },
-      { kind: "sheep", x: playerPos.x + 6, y: 62, z: playerPos.z - 1, hostile: false },
-      { kind: "pig", x: playerPos.x - 5, y: 62, z: playerPos.z + 2, hostile: false },
-      { kind: "pig", x: playerPos.x - 2, y: 62, z: playerPos.z + 5, hostile: false },
-      { kind: "zombie", x: playerPos.x + 8, y: 62, z: playerPos.z + 7, hostile: true },
+      { kind: "sheep", x: playerPos.x + 3, y: this.surfaceYAt(playerPos.x + 3, playerPos.z - 4), z: playerPos.z - 4, hostile: false },
+      { kind: "sheep", x: playerPos.x + 6, y: this.surfaceYAt(playerPos.x + 6, playerPos.z - 1), z: playerPos.z - 1, hostile: false },
+      { kind: "pig", x: playerPos.x - 5, y: this.surfaceYAt(playerPos.x - 5, playerPos.z + 2), z: playerPos.z + 2, hostile: false },
+      { kind: "pig", x: playerPos.x - 2, y: this.surfaceYAt(playerPos.x - 2, playerPos.z + 5), z: playerPos.z + 5, hostile: false },
+      { kind: "zombie", x: playerPos.x + 8, y: this.surfaceYAt(playerPos.x + 8, playerPos.z + 7), z: playerPos.z + 7, hostile: true },
     ];
 
     for (const item of spawn) {
@@ -623,11 +726,13 @@ export class GameSession {
     }
   }
 
-  private advanceWorld(dt: number, playerPos: Vec3) {
+  private advanceWorld(dt: number, playerPos: Vec3): boolean {
     const safeDt = Math.max(0, Math.min(0.2, dt));
     const now = Date.now();
+    let changed = false;
     this.ensureEntityPopulation(playerPos);
-    this.advanceCropGrowth();
+    changed = this.advanceCropGrowth(safeDt) || changed;
+    changed = this.advanceDroppedItems(safeDt, playerPos) || changed;
 
     const dayTickPerSecond = DAY_LENGTH_TICKS / FULL_DAY_SECONDS;
     this.stats.timeOfDay = (this.stats.timeOfDay + safeDt * dayTickPerSecond) % DAY_LENGTH_TICKS;
@@ -694,14 +799,18 @@ export class GameSession {
 
     if (this.smelting && now >= this.smelting.readyAtMs + 30_000) {
       this.smelting = null;
+      changed = true;
     }
 
     if (this.stats.health <= 0) {
       this.stats.health = this.stats.maxHealth;
       this.stats.hunger = this.stats.maxHunger;
       this.stats.timeOfDay = 6_000;
-      this.latestPlayerPos = { ...playerPos };
+      this.latestPlayerPos = this.getSpawnPosition();
+      this.setStatusMessage("You respawned at the campsite.");
+      changed = true;
     }
+    return changed;
   }
 
   private maybeBroadcastGameplay() {
@@ -719,10 +828,19 @@ export class GameSession {
   private broadcastGameplay(force: boolean) {
     if (!force && Date.now() - this.lastBroadcastMs <= 120) return;
 
-    this.post({ type: "INVENTORY_SYNC", entries: this.inventoryEntries(), smelting: this.smelting });
+    this.post({
+      type: "INVENTORY_SYNC",
+      entries: this.inventoryEntries(),
+      smelting: this.smelting,
+      pickedUpItemId: this.pendingPickedUpItemId,
+    });
     this.post({
       type: "ENTITY_SNAPSHOT",
       entities: this.entities.map(({ vx: _vx, vz: _vz, wanderTimer: _wt, ...snapshot }) => snapshot),
+    });
+    this.post({
+      type: "DROPPED_ITEM_SNAPSHOT",
+      items: this.droppedItemSnapshots(),
     });
     this.post({
       type: "PLAYER_STATS",
@@ -743,6 +861,11 @@ export class GameSession {
         lastErrorCode: this.frameDiagnostics.lastErrorCode,
       },
     });
+    if (this.queuedStatusMessage) {
+      this.post({ type: "STATUS", message: this.queuedStatusMessage });
+      this.queuedStatusMessage = null;
+    }
+    this.pendingPickedUpItemId = null;
   }
 
   private saveState(): SavedState {
@@ -763,6 +886,13 @@ export class GameSession {
       blockOverrides: [...this.blockOverrides.values()],
       cropPlots: [...this.cropPlots.values()],
       farmlandPlots: [...this.farmlandPlots.values()],
+      droppedItems: this.droppedItems.map((item) => ({
+        id: item.id,
+        itemId: item.itemId,
+        count: item.count,
+        position: item.position,
+        pickupDelayMs: item.pickupDelayMs,
+      })),
     };
   }
 
@@ -783,6 +913,59 @@ export class GameSession {
       }
     }
     return false;
+  }
+
+  private advanceDroppedItems(dt: number, playerPos: Vec3): boolean {
+    const collectedIndices: number[] = [];
+    for (let i = 0; i < this.droppedItems.length; i++) {
+      const item = this.droppedItems[i];
+      item.pickupDelayMs = Math.max(0, item.pickupDelayMs - dt * 1000);
+      if (item.pickupDelayMs > 0) continue;
+      const dx = item.position.x - playerPos.x;
+      const dy = item.position.y - playerPos.y;
+      const dz = item.position.z - playerPos.z;
+      if (Math.hypot(dx, dy * 0.5, dz) > ITEM_PICKUP_RADIUS) continue;
+      this.addItem(item.itemId, item.count);
+      this.pendingPickedUpItemId = item.itemId;
+      this.setStatusMessage(`Picked up ${item.itemId.replace("_", " ")} x${item.count}.`);
+      collectedIndices.push(i);
+    }
+
+    for (let i = collectedIndices.length - 1; i >= 0; i--) {
+      this.droppedItems.splice(collectedIndices[i], 1);
+    }
+    return collectedIndices.length > 0;
+  }
+
+  private droppedItemSnapshots(): DroppedItemSnapshot[] {
+    return this.droppedItems.map((item) => ({
+      id: item.id,
+      itemId: item.itemId,
+      count: item.count,
+      position: item.position,
+      pickupReadyInMs: Math.max(0, item.pickupDelayMs),
+    }));
+  }
+
+  private spawnDrop(itemId: ItemId, count: number, position: Vec3) {
+    if (count <= 0) return;
+    this.droppedItems.push({
+      id: `d${this.nextDroppedItemId++}`,
+      itemId,
+      count,
+      position: { x: position.x, y: position.y, z: position.z },
+      pickupDelayMs: ITEM_PICKUP_DELAY_MS,
+    });
+  }
+
+  private setStatusMessage(message: string) {
+    this.queuedStatusMessage = message;
+  }
+
+  private shortGrassDropsSeeds(worldX: number, worldY: number, worldZ: number): boolean {
+    let hash = Math.imul(worldX, 73_856_093) ^ Math.imul(worldY, 19_349_663) ^ Math.imul(worldZ, 83_492_791);
+    hash ^= hash >>> 13;
+    return Math.abs(hash) % 8 === 0;
   }
 
   private tryBreedEntity(entity: EntityRuntime) {
@@ -848,5 +1031,27 @@ export class GameSession {
       }
     }
     return nextId;
+  }
+
+  private computeNextDroppedItemId(): number {
+    let nextId = 1;
+    for (const item of this.droppedItems) {
+      const numericId = Number.parseInt(item.id.replace(/^d/, ""), 10);
+      if (Number.isFinite(numericId)) {
+        nextId = Math.max(nextId, numericId + 1);
+      }
+    }
+    return nextId;
+  }
+
+  private getSpawnPosition(): Vec3 {
+    const world = this.getWorld() as WasmWorld & { surface_height_at: (wx: number, wz: number) => number };
+    const surfaceY = world.surface_height_at(Math.floor(DEFAULT_SPAWN_X), Math.floor(DEFAULT_SPAWN_Z));
+    return { x: DEFAULT_SPAWN_X, y: surfaceY + 1, z: DEFAULT_SPAWN_Z };
+  }
+
+  private surfaceYAt(worldX: number, worldZ: number): number {
+    const world = this.getWorld() as WasmWorld & { surface_height_at: (wx: number, wz: number) => number };
+    return world.surface_height_at(Math.floor(worldX), Math.floor(worldZ)) + 1;
   }
 }

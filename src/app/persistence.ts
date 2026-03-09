@@ -13,7 +13,7 @@ export function loadState(saveKey: string): SavedState | null {
     const raw = localStorage.getItem(saveKey);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as SavedState;
-    if (!parsed || parsed.version !== 1) return null;
+    if (!parsed || (parsed.version !== 1 && parsed.version !== 2)) return null;
     return parsed;
   } catch (err) {
     console.warn("Failed to load state:", err);

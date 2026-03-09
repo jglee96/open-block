@@ -2,7 +2,8 @@ export class InputManager {
   keys = new Set<string>();
   deltaX = 0;
   deltaY = 0;
-  locked = false;
+  private pointerLocked = false;
+  private lockedOverride: boolean | null = null;
 
   private canvas: HTMLCanvasElement;
   private mouseSensitivity = 0.002;
@@ -15,7 +16,7 @@ export class InputManager {
     });
 
     document.addEventListener("pointerlockchange", () => {
-      this.locked = document.pointerLockElement === canvas;
+      this.pointerLocked = document.pointerLockElement === canvas;
     });
 
     document.addEventListener("keydown", (e) => {
@@ -31,6 +32,30 @@ export class InputManager {
       this.deltaX += e.movementX * this.mouseSensitivity;
       this.deltaY += e.movementY * this.mouseSensitivity;
     });
+  }
+
+  get locked(): boolean {
+    return this.lockedOverride ?? this.pointerLocked;
+  }
+
+  setLockedForTest(nextLocked: boolean) {
+    this.lockedOverride = nextLocked;
+  }
+
+  setKeyStateForTest(code: string, pressed: boolean) {
+    if (pressed) this.keys.add(code);
+    else this.keys.delete(code);
+  }
+
+  addLookDeltaForTest(dx: number, dy: number) {
+    this.deltaX += dx;
+    this.deltaY += dy;
+  }
+
+  clearTestInput() {
+    this.keys.clear();
+    this.deltaX = 0;
+    this.deltaY = 0;
   }
 
   /** Call at the start of each frame to consume accumulated mouse movement. */

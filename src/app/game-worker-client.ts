@@ -1,5 +1,6 @@
 import type {
   ChunkMeshMsg,
+  DroppedItemSnapshotMsg,
   EntitySnapshotMsg,
   FrameDiagnosticsMsg,
   InventorySyncMsg,
@@ -12,14 +13,16 @@ import type {
 interface GameWorkerClientOptions {
   workerUrl: URL;
   seed: number;
-  onReady: () => void;
+  onReady: (spawn: { x: number; y: number; z: number }) => void;
   onChunkMesh: (msg: ChunkMeshMsg) => void;
   onEntitySnapshot: (msg: EntitySnapshotMsg) => void;
+  onDroppedItemSnapshot: (msg: DroppedItemSnapshotMsg) => void;
   onInventorySync: (msg: InventorySyncMsg) => void;
   onPlayerStats: (msg: PlayerStatsMsg) => void;
   onFrameDiagnostics: (msg: FrameDiagnosticsMsg) => void;
   onStateSnapshot: (msg: StateSnapshotMsg) => void;
   onErrorMessage: (message: string) => void;
+  onStatusMessage: (message: string) => void;
   onRestarting: (delayMs: number) => void;
 }
 
@@ -41,7 +44,7 @@ export class GameWorkerClient {
         case "READY":
           this.ready = true;
           this.restartAttempts = 0;
-          this.options.onReady();
+          this.options.onReady(msg.spawn);
           break;
         case "CHUNK_MESH":
           this.options.onChunkMesh(msg);
@@ -51,6 +54,9 @@ export class GameWorkerClient {
           break;
         case "INVENTORY_SYNC":
           this.options.onInventorySync(msg);
+          break;
+        case "DROPPED_ITEM_SNAPSHOT":
+          this.options.onDroppedItemSnapshot(msg);
           break;
         case "PLAYER_STATS":
           this.options.onPlayerStats(msg);
@@ -63,6 +69,9 @@ export class GameWorkerClient {
           break;
         case "ERROR":
           this.options.onErrorMessage(msg.message);
+          break;
+        case "STATUS":
+          this.options.onStatusMessage(msg.message);
           break;
       }
     };

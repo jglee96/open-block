@@ -15,13 +15,13 @@ export interface RayHit {
  * @param origin  - ray start position [x, y, z]
  * @param dir     - ray direction (need not be normalised, but should be non-zero)
  * @param maxDist - maximum distance to travel
- * @param isSolid - block solidity query (integer coords)
+ * @param isHitBlock - block hit query (integer coords)
  */
 export function raycast(
   origin: [number, number, number],
   dir: [number, number, number],
   maxDist: number,
-  isSolid: (x: number, y: number, z: number) => boolean,
+  isHitBlock: (x: number, y: number, z: number) => boolean,
 ): RayHit | null {
   const INF = 1e30;
   let bx = Math.floor(origin[0]);
@@ -63,7 +63,7 @@ export function raycast(
 
     if (traveled > maxDist) break;
 
-    if (isSolid(bx, by, bz)) {
+    if (isHitBlock(bx, by, bz)) {
       return {
         worldX: bx,
         worldY: by,

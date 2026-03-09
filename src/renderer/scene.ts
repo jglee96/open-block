@@ -1,5 +1,7 @@
 import type { GpuContext } from "./gpu";
 import type { Pipeline } from "./pipeline";
+import { getItemRenderColor, type ItemId } from "../gameplay/items";
+import type { DroppedItemSnapshot } from "../worker/protocol";
 
 export interface ChunkKey {
   x: number;
@@ -19,6 +21,10 @@ export class Scene {
   private device: GPUDevice;
   private chunks = new Map<string, ChunkBuffer>();
   private blockDataMap = new Map<string, Uint8Array>();
+  private droppedItems: DroppedItemSnapshot[] = [];
+  private droppedItemBuffer: GPUBuffer | null = null;
+  private droppedItemBufferSize = 0;
+  private droppedItemVertexCount = 0;
 
   constructor(ctx: GpuContext) {
     this.device = ctx.device;
@@ -85,14 +91,95 @@ export class Scene {
     return this.chunks.size;
   }
 
+  setDroppedItems(items: DroppedItemSnapshot[]) {
+    this.droppedItems = items;
+  }
+
   /** Encode all draw calls into an existing render pass. */
-  draw(pass: GPURenderPassEncoder, pipeline: Pipeline) {
+  draw(pass: GPURenderPassEncoder, pipeline: Pipeline, nowMs: number) {
     pass.setPipeline(pipeline.pipeline);
     pass.setBindGroup(0, pipeline.bindGroup);
 
     for (const chunk of this.chunks.values()) {
       pass.setVertexBuffer(0, chunk.vertexBuffer);
       pass.draw(chunk.vertexCount);
+    }
+
+    this.updateDroppedItemBuffer(nowMs);
+    if (this.droppedItemBuffer && this.droppedItemVertexCount > 0) {
+      pass.setVertexBuffer(0, this.droppedItemBuffer);
+      pass.draw(this.droppedItemVertexCount);
+    }
+  }
+
+  private updateDroppedItemBuffer(nowMs: number) {
+    if (this.droppedItems.length === 0) {
+      this.droppedItemVertexCount = 0;
+      return;
+    }
+
+    const verts: number[] = [];
+    for (const item of this.droppedItems) {
+      this.pushDroppedItemVerts(verts, item, nowMs);
+    }
+    this.droppedItemVertexCount = verts.length / 9;
+    const data = new Float32Array(verts);
+    const requiredSize = data.byteLength;
+    if (!this.droppedItemBuffer || this.droppedItemBufferSize < requiredSize) {
+      this.droppedItemBuffer?.destroy();
+      this.droppedItemBuffer = this.device.createBuffer({
+        size: Math.max(requiredSize, 36 * 6 * 8),
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      });
+      this.droppedItemBufferSize = Math.max(requiredSize, 36 * 6 * 8);
+    }
+    this.device.queue.writeBuffer(this.droppedItemBuffer, 0, data);
+  }
+
+  private pushDroppedItemVerts(verts: number[], item: DroppedItemSnapshot, nowMs: number) {
+    const bob = Math.sin((nowMs + item.position.x * 100 + item.position.z * 70) / 220) * 0.06;
+    const halfW = 0.18;
+    const height = 0.36;
+    const x = item.position.x;
+    const y = item.position.y + bob;
+    const z = item.position.z;
+    const color = getItemRenderColor(item.itemId as ItemId);
+    const quads = [
+      {
+        normal: [0.707, 0, 0.707] as [number, number, number],
+        points: [
+          [x - halfW, y, z - halfW],
+          [x - halfW, y + height, z - halfW],
+          [x + halfW, y + height, z + halfW],
+          [x + halfW, y, z + halfW],
+        ],
+      },
+      {
+        normal: [-0.707, 0, 0.707] as [number, number, number],
+        points: [
+          [x + halfW, y, z - halfW],
+          [x + halfW, y + height, z - halfW],
+          [x - halfW, y + height, z + halfW],
+          [x - halfW, y, z + halfW],
+        ],
+      },
+    ];
+
+    for (const quad of quads) {
+      this.pushQuad(verts, quad.points, quad.normal, color);
+      this.pushQuad(verts, [quad.points[2], quad.points[1], quad.points[0], quad.points[3]], [-quad.normal[0], 0, -quad.normal[2]], color);
+    }
+  }
+
+  private pushQuad(
+    verts: number[],
+    points: number[][],
+    normal: [number, number, number],
+    color: [number, number, number],
+  ) {
+    for (const index of [0, 1, 2, 0, 2, 3]) {
+      const point = points[index];
+      verts.push(point[0], point[1], point[2], normal[0], normal[1], normal[2], color[0], color[1], color[2]);
     }
   }
 }

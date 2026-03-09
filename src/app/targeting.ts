@@ -19,7 +19,7 @@ function isFiniteVector(x: number, y: number, z: number): boolean {
 export function findBlockTarget(
   camera: Camera,
   maxInteractDistance: number,
-  isSolid: (x: number, y: number, z: number) => boolean,
+  isTargetable: (x: number, y: number, z: number) => boolean,
   getBlockTypeAt: (x: number, y: number, z: number) => number,
 ): TargetHit {
   const fwd = camera.forward as [number, number, number];
@@ -29,7 +29,7 @@ export function findBlockTarget(
     return null;
   }
 
-  const hit = raycast(pos, fwd, maxInteractDistance, isSolid);
+  const hit = raycast(pos, fwd, maxInteractDistance, isTargetable);
   if (!hit) return null;
   if (!Number.isFinite(hit.distance) || hit.distance < 0 || hit.distance > maxInteractDistance + 0.001) {
     return null;

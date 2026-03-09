@@ -143,7 +143,7 @@ export class GameplayRuntime {
     const blockTarget = findBlockTarget(
       this.options.camera,
       this.options.maxInteractDistance,
-      this.options.blockCache.isSolid.bind(this.options.blockCache),
+      this.options.blockCache.isTargetable.bind(this.options.blockCache),
       this.options.blockCache.getBlockTypeAt.bind(this.options.blockCache),
     );
     const entityTarget = findEntityTarget(this.options.camera, entitySnapshots, this.options.maxInteractDistance);

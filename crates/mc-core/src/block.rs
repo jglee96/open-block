@@ -19,6 +19,7 @@ pub enum BlockType {
     WheatCrop1 = 12,
     WheatCrop2 = 13,
     WheatCrop3 = 14,
+    ShortGrass = 15,
 }
 
 impl BlockType {
@@ -39,6 +40,7 @@ impl BlockType {
             BlockType::WheatCrop1 => [0.45, 0.65, 0.18],
             BlockType::WheatCrop2 => [0.62, 0.72, 0.20],
             BlockType::WheatCrop3 => [0.82, 0.70, 0.28],
+            BlockType::ShortGrass => [0.42, 0.76, 0.24],
         }
     }
 
@@ -51,6 +53,7 @@ impl BlockType {
                 | BlockType::WheatCrop1
                 | BlockType::WheatCrop2
                 | BlockType::WheatCrop3
+                | BlockType::ShortGrass
         )
     }
 
@@ -70,6 +73,7 @@ impl BlockType {
             12 => BlockType::WheatCrop1,
             13 => BlockType::WheatCrop2,
             14 => BlockType::WheatCrop3,
+            15 => BlockType::ShortGrass,
             _ => BlockType::Air,
         }
     }
