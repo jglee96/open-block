@@ -217,7 +217,7 @@ async function main() {
     },
     onDroppedItemSnapshot: (msg) => {
       droppedItemSnapshots = msg.items;
-      scene.setDroppedItems(msg.items);
+      scene.setDroppedItems(msg.items, performance.now());
     },
     onInventorySync: (msg) => {
       inventoryEntries = msg.entries;

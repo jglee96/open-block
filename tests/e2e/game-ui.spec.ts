@@ -70,6 +70,13 @@ async function droppedItemCount(page: Page, itemId: string): Promise<number> {
   }, itemId);
 }
 
+async function droppedItemY(page: Page, itemId: string): Promise<number | null> {
+  return page.evaluate((targetItemId) => {
+    const items = window.__openBlockE2E?.getSnapshot().droppedItems ?? [];
+    return items.find((candidate) => candidate.itemId === targetItemId)?.position.y ?? null;
+  }, itemId);
+}
+
 async function beginControl(page: Page) {
   await page.evaluate(async () => {
     await window.__openBlockE2E?.beginControl();
@@ -363,6 +370,10 @@ test("breaks a targeted block, picks up the drop, switches hotbar, and places it
   await page.evaluate(() => window.__openBlockE2E?.interactAtCurrentTarget(0));
   await expect.poll(() => blockTypeAt(page, 8, 63, 6)).toBe(BLOCK_TYPE.air);
   await expect.poll(() => droppedItemCount(page, "log")).toBe(1);
+  await expect.poll(() => droppedItemY(page, "log")).toBeGreaterThan(63.1);
+  await advanceWorker(page, { x: 8.5, y: 62, z: 8.5 }, 12);
+  await expect.poll(() => droppedItemY(page, "log")).toBeLessThan(63.02);
+  await expect.poll(() => droppedItemY(page, "log")).toBeGreaterThan(62.98);
   await expect.poll(() => inventoryCount(page, "log")).toBe(0);
   await advanceWorker(page, { x: 8.5, y: 63.1, z: 6.7 });
   await expect.poll(() => inventoryCount(page, "log")).toBe(1);

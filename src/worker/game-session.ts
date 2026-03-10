@@ -6,6 +6,7 @@ import {
   getPlaceableBlockType,
   getRecipe,
   isCropBlockType,
+  isPlantBlockType,
   isHoeItem,
   type ItemId,
 } from "../gameplay/items";
@@ -30,6 +31,8 @@ const CROP_GROWTH_MS = 15_000;
 const FARMLAND_DRY_MS = 20_000;
 const ITEM_PICKUP_DELAY_MS = 500;
 const ITEM_PICKUP_RADIUS = 1.35;
+const DROPPED_ITEM_GRAVITY = 18;
+const DROPPED_ITEM_MAX_FALL_SPEED = 14;
 const DEFAULT_SPAWN_X = 8.5;
 const DEFAULT_SPAWN_Z = 8.5;
 
@@ -69,6 +72,7 @@ interface DroppedItemRuntime {
   count: number;
   position: Vec3;
   pickupDelayMs: number;
+  vy: number;
 }
 
 type WasmWorld = import("mc-core").WasmWorld;
@@ -418,6 +422,7 @@ export class GameSession {
         count: item.count,
         position: item.position,
         pickupDelayMs: item.pickupDelayMs ?? 0,
+        vy: 0,
       });
     }
     this.nextDroppedItemId = this.computeNextDroppedItemId();
@@ -916,9 +921,11 @@ export class GameSession {
   }
 
   private advanceDroppedItems(dt: number, playerPos: Vec3): boolean {
+    let moved = false;
     const collectedIndices: number[] = [];
     for (let i = 0; i < this.droppedItems.length; i++) {
       const item = this.droppedItems[i];
+      moved = this.advanceDroppedItemPhysics(item, dt) || moved;
       item.pickupDelayMs = Math.max(0, item.pickupDelayMs - dt * 1000);
       if (item.pickupDelayMs > 0) continue;
       const dx = item.position.x - playerPos.x;
@@ -934,7 +941,7 @@ export class GameSession {
     for (let i = collectedIndices.length - 1; i >= 0; i--) {
       this.droppedItems.splice(collectedIndices[i], 1);
     }
-    return collectedIndices.length > 0;
+    return moved || collectedIndices.length > 0;
   }
 
   private droppedItemSnapshots(): DroppedItemSnapshot[] {
@@ -955,7 +962,49 @@ export class GameSession {
       count,
       position: { x: position.x, y: position.y, z: position.z },
       pickupDelayMs: ITEM_PICKUP_DELAY_MS,
+      vy: 0,
     });
+  }
+
+  private advanceDroppedItemPhysics(item: DroppedItemRuntime, dt: number): boolean {
+    const prevY = item.position.y;
+    const prevVy = item.vy;
+
+    item.vy = Math.max(item.vy - DROPPED_ITEM_GRAVITY * dt, -DROPPED_ITEM_MAX_FALL_SPEED);
+    const nextY = item.position.y + item.vy * dt;
+    const landingY = this.findDroppedItemLandingY(item, nextY);
+
+    if (landingY !== null) {
+      item.position.y = landingY;
+      item.vy = 0;
+    } else {
+      item.position.y = nextY;
+    }
+
+    return Math.abs(item.position.y - prevY) > 0.0001 || Math.abs(item.vy - prevVy) > 0.0001;
+  }
+
+  private findDroppedItemLandingY(item: DroppedItemRuntime, nextY: number): number | null {
+    if (nextY > item.position.y) return null;
+
+    const worldX = Math.floor(item.position.x);
+    const worldZ = Math.floor(item.position.z);
+    const startBlockY = Math.floor(item.position.y - 0.001);
+    const endBlockY = Math.floor(nextY - 0.001);
+
+    for (let worldY = startBlockY; worldY >= endBlockY; worldY--) {
+      if (this.isDroppedItemSupportBlock(worldX, worldY, worldZ)) {
+        return worldY + 1;
+      }
+    }
+
+    return null;
+  }
+
+  private isDroppedItemSupportBlock(worldX: number, worldY: number, worldZ: number): boolean {
+    if (worldY < 0) return true;
+    const blockType = this.getBlockTypeAtWorld(worldX, worldY, worldZ);
+    return blockType !== BLOCK_TYPE.air && blockType !== BLOCK_TYPE.water && !isPlantBlockType(blockType);
   }
 
   private setStatusMessage(message: string) {
