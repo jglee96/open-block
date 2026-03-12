@@ -1,7 +1,9 @@
 import terrainWgsl from "./shaders/terrain.wgsl?raw";
+import waterWgsl from "./shaders/water.wgsl?raw";
 
-export interface Pipeline {
-  pipeline: GPURenderPipeline;
+export interface RenderPipelines {
+  terrainPipeline: GPURenderPipeline;
+  waterPipeline: GPURenderPipeline;
   uniformBuffer: GPUBuffer;
   bindGroup: GPUBindGroup;
   bindGroupLayout: GPUBindGroupLayout;
@@ -24,8 +26,9 @@ export const UNIFORM_BUFFER_SIZE = 128;
 export function createPipeline(
   device: GPUDevice,
   format: GPUTextureFormat,
-): Pipeline {
-  const shader = device.createShaderModule({ code: terrainWgsl });
+): RenderPipelines {
+  const terrainShader = device.createShaderModule({ code: terrainWgsl });
+  const waterShader = device.createShaderModule({ code: waterWgsl });
 
   const bindGroupLayout = device.createBindGroupLayout({
     entries: [
@@ -41,10 +44,10 @@ export function createPipeline(
     bindGroupLayouts: [bindGroupLayout],
   });
 
-  const pipeline = device.createRenderPipeline({
+  const terrainPipeline = device.createRenderPipeline({
     layout: pipelineLayout,
     vertex: {
-      module: shader,
+      module: terrainShader,
       entryPoint: "vs_main",
       buffers: [
         {
@@ -58,7 +61,7 @@ export function createPipeline(
       ],
     },
     fragment: {
-      module: shader,
+      module: terrainShader,
       entryPoint: "fs_main",
       targets: [{ format }],
     },
@@ -73,6 +76,44 @@ export function createPipeline(
     },
   });
 
+  const waterPipeline = device.createRenderPipeline({
+    layout: pipelineLayout,
+    vertex: {
+      module: waterShader,
+      entryPoint: "vs_main",
+      buffers: [
+        {
+          arrayStride: VERTEX_STRIDE,
+          attributes: [
+            { shaderLocation: 0, offset: 0,  format: "float32x3" },
+            { shaderLocation: 1, offset: 12, format: "float32x3" },
+            { shaderLocation: 2, offset: 24, format: "float32x3" },
+          ],
+        },
+      ],
+    },
+    fragment: {
+      module: waterShader,
+      entryPoint: "fs_main",
+      targets: [{
+        format,
+        blend: {
+          color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha", operation: "add" },
+          alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
+        },
+      }],
+    },
+    primitive: {
+      topology: "triangle-list",
+      cullMode: "back",
+    },
+    depthStencil: {
+      format: "depth24plus",
+      depthWriteEnabled: false,
+      depthCompare: "less-equal",
+    },
+  });
+
   const uniformBuffer = device.createBuffer({
     size: UNIFORM_BUFFER_SIZE,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -83,5 +124,5 @@ export function createPipeline(
     entries: [{ binding: 0, resource: { buffer: uniformBuffer } }],
   });
 
-  return { pipeline, uniformBuffer, bindGroup, bindGroupLayout };
+  return { terrainPipeline, waterPipeline, uniformBuffer, bindGroup, bindGroupLayout };
 }

@@ -66,6 +66,7 @@ declare global {
       sendToWorker: (msg: MainToWorker) => void;
       generateChunk: (chunkX: number, chunkZ: number) => void;
       getBlockTypeAt: (worldX: number, worldY: number, worldZ: number) => number;
+      getFluidLevelAt: (worldX: number, worldY: number, worldZ: number) => number;
       setPlayerPose: (pose: { x: number; y: number; z: number; yaw?: number; pitch?: number }) => void;
       beginControl: () => Promise<void>;
       move: (input: { forward?: boolean; back?: boolean; left?: boolean; right?: boolean; jump?: boolean; durationMs: number }) => Promise<void>;
@@ -208,9 +209,16 @@ async function main() {
       if (saved) workerClient.send({ type: "LOAD_STATE", state: saved });
     },
     onChunkMesh: (msg) => {
-      scene.uploadChunk(msg.chunkX, msg.chunkZ, msg.buffer, msg.vertexCount);
-      scene.storeBlockData(msg.chunkX, msg.chunkZ, msg.blockData);
+      scene.uploadChunk(
+        msg.chunkX,
+        msg.chunkZ,
+        msg.solidBuffer,
+        msg.solidVertexCount,
+        msg.waterBuffer,
+        msg.waterVertexCount,
+      );
       blockCache.storeChunk(msg.chunkX, msg.chunkZ, msg.blockData);
+      blockCache.storeFluidChunk(msg.chunkX, msg.chunkZ, msg.fluidData);
     },
     onEntitySnapshot: (msg) => {
       entitySnapshots = msg.entities;
@@ -298,6 +306,7 @@ async function main() {
         if (workerClient.isReady()) postToWorker({ type: "GENERATE_CHUNK", chunkX, chunkZ });
       },
       getBlockTypeAt: (worldX, worldY, worldZ) => blockCache.getBlockTypeAt(worldX, worldY, worldZ),
+      getFluidLevelAt: (worldX, worldY, worldZ) => blockCache.getFluidLevelAt(worldX, worldY, worldZ),
       setPlayerPose: (pose) => {
         gameplayRuntime.setPlayerPose(pose);
       },

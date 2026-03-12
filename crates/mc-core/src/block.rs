@@ -1,5 +1,11 @@
 use wasm_bindgen::prelude::*;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GravityMode {
+    Static,
+    Falling,
+}
+
 #[wasm_bindgen]
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,16 +51,47 @@ impl BlockType {
     }
 
     pub fn is_opaque(self) -> bool {
-        !matches!(
+        self.is_solid()
+    }
+
+    pub fn is_solid(self) -> bool {
+        !matches!(self, BlockType::Air | BlockType::Water) && !self.is_decorative()
+    }
+
+    pub fn is_fluid(self) -> bool {
+        matches!(self, BlockType::Water)
+    }
+
+    pub fn is_decorative(self) -> bool {
+        matches!(
             self,
-            BlockType::Air
-                | BlockType::Water
-                | BlockType::WheatCrop0
+            BlockType::WheatCrop0
                 | BlockType::WheatCrop1
                 | BlockType::WheatCrop2
                 | BlockType::WheatCrop3
                 | BlockType::ShortGrass
         )
+    }
+
+    pub fn gravity_mode(self) -> GravityMode {
+        match self {
+            BlockType::Air
+            | BlockType::Stone
+            | BlockType::Dirt
+            | BlockType::Grass
+            | BlockType::Sand
+            | BlockType::Water
+            | BlockType::Snow
+            | BlockType::Bedrock
+            | BlockType::Log
+            | BlockType::Leaves
+            | BlockType::Farmland
+            | BlockType::WheatCrop0
+            | BlockType::WheatCrop1
+            | BlockType::WheatCrop2
+            | BlockType::WheatCrop3
+            | BlockType::ShortGrass => GravityMode::Static,
+        }
     }
 
     pub fn from_u8(v: u8) -> Self {

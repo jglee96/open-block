@@ -5,7 +5,7 @@ mod utils;
 mod world;
 
 use wasm_bindgen::prelude::*;
-use js_sys::Float32Array;
+use js_sys::{Float32Array, Int32Array};
 
 pub use block::BlockType;
 pub use chunk::{Chunk, CHUNK_SIZE, CHUNK_HEIGHT};
@@ -41,6 +41,11 @@ impl WasmWorld {
         Float32Array::from(data.as_slice())
     }
 
+    pub fn build_water_mesh(&mut self, chunk_x: i32, chunk_z: i32) -> Float32Array {
+        let data = self.inner.build_water_mesh_neighbors(chunk_x, chunk_z);
+        Float32Array::from(data.as_slice())
+    }
+
     /// Set a block at world coordinates. Affected chunk must be re-meshed by caller.
     pub fn set_block(&mut self, wx: i32, wy: i32, wz: i32, block_type: u8) {
         let block = BlockType::from_u8(block_type);
@@ -53,6 +58,17 @@ impl WasmWorld {
         self.inner
             .get_chunk(cx, cz)
             .map(|c| js_sys::Uint8Array::from(c.blocks_raw()))
+    }
+
+    pub fn get_chunk_fluids(&self, cx: i32, cz: i32) -> Option<js_sys::Uint8Array> {
+        self.inner
+            .get_chunk(cx, cz)
+            .map(|c| js_sys::Uint8Array::from(c.fluids_raw()))
+    }
+
+    pub fn step_fluids(&mut self, max_updates: u32) -> Int32Array {
+        let data = self.inner.step_fluids(max_updates as usize);
+        Int32Array::from(data.as_slice())
     }
 
     pub fn surface_height_at(&self, wx: i32, wz: i32) -> u32 {

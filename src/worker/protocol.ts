@@ -216,11 +216,16 @@ export interface ChunkMeshMsg {
   type: "CHUNK_MESH";
   chunkX: number;
   chunkZ: number;
-  /** Transferable vertex buffer — zero-copy */
-  buffer: ArrayBuffer;
-  vertexCount: number;
+  /** Transferable solid terrain vertex buffer — zero-copy */
+  solidBuffer: ArrayBuffer;
+  solidVertexCount: number;
+  /** Transferable water vertex buffer — zero-copy */
+  waterBuffer: ArrayBuffer;
+  waterVertexCount: number;
   /** Raw block data 16×64×16 = 16 384 bytes — for physics collision */
   blockData: ArrayBuffer;
+  /** Raw fluid data 16×64×16 = 16 384 bytes — for water simulation and rendering */
+  fluidData: ArrayBuffer;
 }
 
 export interface InventorySyncMsg {

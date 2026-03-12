@@ -8,6 +8,14 @@ const WALK_SPEED = 4.3; // blocks/s
 const H_FRICTION = 0.8; // horizontal velocity multiplier when no input (per-tick decay)
 
 type IsSolid = (x: number, y: number, z: number) => boolean;
+type SampleMedium = (
+  minX: number,
+  maxX: number,
+  minY: number,
+  maxY: number,
+  minZ: number,
+  maxZ: number,
+) => { submersion: number; flowX: number; flowY: number; flowZ: number };
 
 /** Returns true if the AABB [minX..maxX, minY..maxY, minZ..maxZ] overlaps any solid block. */
 function overlapsWorld(
@@ -47,12 +55,30 @@ export class PlayerPhysics {
     keys: Set<string>,
     dt: number,
     isSolid: IsSolid,
+    sampleMedium: SampleMedium,
   ): void {
-    // ── Gravity ────────────────────────────────────────────────────────────
-    this.vy += GRAVITY * dt;
+    const medium = sampleMedium(
+      feet[0] - HALF_W, feet[0] + HALF_W,
+      feet[1], feet[1] + HEIGHT,
+      feet[2] - HALF_W, feet[2] + HALF_W,
+    );
+    const inWater = medium.submersion > 0.05;
+    const swimming = medium.submersion > 0.45;
+
+    const gravityScale = swimming ? 0.22 : inWater ? 0.55 : 1;
+    this.vy += GRAVITY * gravityScale * dt;
+    if (inWater) {
+      this.vy = Math.max(this.vy, swimming ? -4.0 : -9.0);
+      this.vx += medium.flowX * dt * 3.4;
+      this.vz += medium.flowZ * dt * 3.4;
+      this.vy += medium.flowY * dt;
+    }
 
     // ── Jump ───────────────────────────────────────────────────────────────
-    if (keys.has("Space") && this.onGround) {
+    if (swimming && keys.has("Space")) {
+      this.vy += 10 * dt;
+      this.onGround = false;
+    } else if (keys.has("Space") && this.onGround) {
       this.vy = JUMP_VEL;
       this.onGround = false;
     }
@@ -70,12 +96,17 @@ export class PlayerPhysics {
     if (keys.has("KeyD")) { mx += rgtX; mz += rgtZ; }
 
     const hLen = Math.sqrt(mx * mx + mz * mz);
+    const moveSpeed = swimming ? 2.4 : inWater ? 3.2 : WALK_SPEED;
     if (hLen > 0) {
-      this.vx = (mx / hLen) * WALK_SPEED;
-      this.vz = (mz / hLen) * WALK_SPEED;
+      const targetVx = (mx / hLen) * moveSpeed;
+      const targetVz = (mz / hLen) * moveSpeed;
+      const blend = swimming ? 0.24 : inWater ? 0.45 : 1;
+      this.vx += (targetVx - this.vx) * blend;
+      this.vz += (targetVz - this.vz) * blend;
     } else {
-      this.vx *= H_FRICTION;
-      this.vz *= H_FRICTION;
+      const drag = swimming ? 0.86 : inWater ? 0.72 : H_FRICTION;
+      this.vx *= drag;
+      this.vz *= drag;
     }
 
     // ── Sweep X ────────────────────────────────────────────────────────────

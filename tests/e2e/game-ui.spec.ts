@@ -122,6 +122,13 @@ async function blockTypeAt(page: Page, worldX: number, worldY: number, worldZ: n
   );
 }
 
+async function fluidLevelAt(page: Page, worldX: number, worldY: number, worldZ: number): Promise<number> {
+  return page.evaluate(
+    ([x, y, z]) => window.__openBlockE2E?.getFluidLevelAt(x, y, z) ?? 0,
+    [worldX, worldY, worldZ],
+  );
+}
+
 async function generateChunk(page: Page, chunkX: number, chunkZ: number) {
   await page.evaluate(
     ([cx, cz]) => {
@@ -336,6 +343,86 @@ test("collects seeds from short grass and starts a hydrated crop", async ({ page
   await expect.poll(() => blockTypeAt(page, 8, 63, 9)).toBe(BLOCK_TYPE.wheatCrop0);
   await advanceWorker(page, { x: 8.5, y: 63, z: 9.5 }, 320);
   await expect.poll(() => blockTypeAt(page, 8, 63, 9)).toBe(BLOCK_TYPE.wheatCrop1);
+});
+
+test("flows water through a broken opening beneath a source block", async ({ page }) => {
+  await seedSave(
+    page,
+    createState({
+      blockOverrides: [
+        { x: 8, y: 60, z: 8, blockType: BLOCK_TYPE.dirt },
+        { x: 8, y: 61, z: 8, blockType: BLOCK_TYPE.dirt },
+        { x: 8, y: 62, z: 8, blockType: BLOCK_TYPE.water },
+      ],
+    }),
+  );
+  await waitForReady(page);
+  await page.waitForTimeout(100);
+  await generateChunk(page, 0, 0);
+  await expect.poll(() => blockTypeAt(page, 8, 62, 8)).toBe(BLOCK_TYPE.water);
+  await expect.poll(() => blockTypeAt(page, 8, 61, 8)).toBe(BLOCK_TYPE.dirt);
+
+  await expect.poll(() => fluidLevelAt(page, 8, 61, 8)).toBe(0);
+  await page.evaluate(() => {
+    window.__openBlockE2E?.sendToWorker({ type: "BREAK_BLOCK", worldX: 8, worldY: 61, worldZ: 8 });
+  });
+  await advanceWorker(page, { x: 8.5, y: 63, z: 8.5 }, 400);
+  await generateChunk(page, 0, 0);
+
+  await expect.poll(() => fluidLevelAt(page, 8, 61, 8)).toBeGreaterThan(0);
+});
+
+test("keeps an upper block floating after the support below is removed", async ({ page }) => {
+  await seedSave(
+    page,
+    createState({
+      blockOverrides: [
+        { x: 8, y: 62, z: 8, blockType: BLOCK_TYPE.log },
+        { x: 8, y: 63, z: 8, blockType: BLOCK_TYPE.log },
+      ],
+    }),
+  );
+  await waitForReady(page);
+  await generateChunk(page, 0, 0);
+
+  await page.evaluate(() => {
+    window.__openBlockE2E?.sendToWorker({ type: "BREAK_BLOCK", worldX: 8, worldY: 62, worldZ: 8 });
+  });
+
+  await expect.poll(() => blockTypeAt(page, 8, 62, 8)).toBe(BLOCK_TYPE.air);
+  await expect.poll(() => blockTypeAt(page, 8, 63, 8)).toBe(BLOCK_TYPE.log);
+});
+
+test("swims upward when jump is held inside water", async ({ page }) => {
+  await seedSave(
+    page,
+    createState({
+      blockOverrides: [
+        { x: 8, y: 60, z: 8, blockType: BLOCK_TYPE.dirt },
+        { x: 9, y: 60, z: 8, blockType: BLOCK_TYPE.dirt },
+        { x: 8, y: 60, z: 9, blockType: BLOCK_TYPE.dirt },
+        { x: 9, y: 60, z: 9, blockType: BLOCK_TYPE.dirt },
+        { x: 8, y: 61, z: 8, blockType: BLOCK_TYPE.water },
+        { x: 9, y: 61, z: 8, blockType: BLOCK_TYPE.water },
+        { x: 8, y: 61, z: 9, blockType: BLOCK_TYPE.water },
+        { x: 9, y: 61, z: 9, blockType: BLOCK_TYPE.water },
+        { x: 8, y: 62, z: 8, blockType: BLOCK_TYPE.water },
+        { x: 9, y: 62, z: 8, blockType: BLOCK_TYPE.water },
+        { x: 8, y: 62, z: 9, blockType: BLOCK_TYPE.water },
+        { x: 9, y: 62, z: 9, blockType: BLOCK_TYPE.water },
+      ],
+    }),
+  );
+  await waitForReady(page);
+  await generateChunk(page, 0, 0);
+  await setPlayerPose(page, { x: 8.5, y: 61.1, z: 8.5, yaw: 0, pitch: 0 });
+  await beginControl(page);
+
+  const startPos = await cameraPos(page);
+  await movePlayer(page, { jump: true, durationMs: 500 });
+  const afterMove = await cameraPos(page);
+
+  expect(afterMove.y).toBeGreaterThan(startPos.y + 0.2);
 });
 
 test("breaks a targeted block, picks up the drop, switches hotbar, and places it back", async ({ page }) => {

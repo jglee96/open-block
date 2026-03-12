@@ -35,6 +35,7 @@ const DROPPED_ITEM_GRAVITY = 18;
 const DROPPED_ITEM_MAX_FALL_SPEED = 14;
 const DEFAULT_SPAWN_X = 8.5;
 const DEFAULT_SPAWN_Z = 8.5;
+const FLUID_STEP_MAX_UPDATES = 512;
 
 interface EntityRuntime extends EntitySnapshot {
   vx: number;
@@ -131,7 +132,7 @@ export class GameSession {
 
   generateChunk(chunkX: number, chunkZ: number) {
     const reply = this.buildChunkReply(chunkX, chunkZ);
-    this.post(reply, [reply.buffer, reply.blockData]);
+    this.post(reply, [reply.solidBuffer, reply.waterBuffer, reply.blockData, reply.fluidData]);
   }
 
   setBlock(worldX: number, worldY: number, worldZ: number, blockType: number) {
@@ -191,6 +192,7 @@ export class GameSession {
     if (blockType === null) return;
     if (!this.hasItem(itemId, 1)) return;
     if (this.getBlockTypeAtWorld(worldX, worldY, worldZ) !== BLOCK_TYPE.air) return;
+    if (this.getFluidLevelAtWorld(worldX, worldY, worldZ) > 0) return;
 
     const world = this.getWorld();
     world.set_block(worldX, worldY, worldZ, blockType);
@@ -389,6 +391,7 @@ export class GameSession {
     this.blockOverrides.clear();
     for (const override of state.blockOverrides) {
       this.setBlockOverride(override.x, override.y, override.z, override.blockType);
+      this.getWorld().set_block(override.x, override.y, override.z, override.blockType);
     }
 
     this.cropPlots.clear();
@@ -462,35 +465,29 @@ export class GameSession {
     this.blockOverrides.set(this.coordKey(x, y, z), { x, y, z, blockType });
   }
 
-  private applyOverridesForChunk(cx: number, cz: number) {
-    if (!this.wasmWorld || this.blockOverrides.size === 0) return;
-    for (const override of this.blockOverrides.values()) {
-      const cc = this.chunkCoordsFromWorld(override.x, override.z);
-      if (cc.cx === cx && cc.cz === cz) {
-        this.wasmWorld.set_block(override.x, override.y, override.z, override.blockType);
-      }
-    }
-  }
-
   private buildChunkReply(chunkX: number, chunkZ: number) {
     const world = this.getWorld();
-    for (const [dx, dz] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-      this.applyOverridesForChunk(chunkX + dx, chunkZ + dz);
-    }
-
-    const floats = world.build_chunk_mesh(chunkX, chunkZ);
-    const buffer = floats.buffer.slice(0) as ArrayBuffer;
-    const vertexCount = floats.length / 9;
+    const solidFloats = world.build_chunk_mesh(chunkX, chunkZ);
+    const solidBuffer = solidFloats.buffer.slice(0) as ArrayBuffer;
+    const solidVertexCount = solidFloats.length / 9;
+    const waterFloats = world.build_water_mesh(chunkX, chunkZ);
+    const waterBuffer = waterFloats.buffer.slice(0) as ArrayBuffer;
+    const waterVertexCount = waterFloats.length / 9;
     const blockDataJs = world.get_chunk_blocks(chunkX, chunkZ);
     const blockData = blockDataJs ? (blockDataJs.buffer.slice(0) as ArrayBuffer) : new ArrayBuffer(0);
+    const fluidDataJs = world.get_chunk_fluids(chunkX, chunkZ);
+    const fluidData = fluidDataJs ? (fluidDataJs.buffer.slice(0) as ArrayBuffer) : new ArrayBuffer(0);
 
     return {
       type: "CHUNK_MESH" as const,
       chunkX,
       chunkZ,
-      buffer,
-      vertexCount,
+      solidBuffer,
+      solidVertexCount,
+      waterBuffer,
+      waterVertexCount,
       blockData,
+      fluidData,
     };
   }
 
@@ -508,7 +505,18 @@ export class GameSession {
 
     for (const [rcx, rcz] of chunksToRemesh) {
       const reply = this.buildChunkReply(rcx, rcz);
-      this.post(reply, [reply.buffer, reply.blockData]);
+      this.post(reply, [reply.solidBuffer, reply.waterBuffer, reply.blockData, reply.fluidData]);
+    }
+  }
+
+  private remeshChunkCoords(chunkCoords: Array<[number, number]>) {
+    const seen = new Set<string>();
+    for (const [chunkX, chunkZ] of chunkCoords) {
+      const key = `${chunkX},${chunkZ}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const reply = this.buildChunkReply(chunkX, chunkZ);
+      this.post(reply, [reply.solidBuffer, reply.waterBuffer, reply.blockData, reply.fluidData]);
     }
   }
 
@@ -574,6 +582,8 @@ export class GameSession {
 
   private getBlockTypeAtWorld(wx: number, wy: number, wz: number): number {
     if (wy < 0 || wy >= CHUNK_HEIGHT) return BLOCK_TYPE.air;
+    const override = this.blockOverrides.get(this.coordKey(wx, wy, wz));
+    if (override) return override.blockType;
     const { cx, cz } = this.chunkCoordsFromWorld(wx, wz);
     this.ensureChunkGenerated(cx, cz);
     const chunk = this.getWorld().get_chunk_blocks(cx, cz);
@@ -582,6 +592,22 @@ export class GameSession {
     const lz = ((wz % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
     const idx = wy * CHUNK_SIZE * CHUNK_SIZE + lz * CHUNK_SIZE + lx;
     return chunk[idx] ?? BLOCK_TYPE.air;
+  }
+
+  private getFluidLevelAtWorld(wx: number, wy: number, wz: number): number {
+    if (wy < 0 || wy >= CHUNK_HEIGHT) return 0;
+    const { cx, cz } = this.chunkCoordsFromWorld(wx, wz);
+    this.ensureChunkGenerated(cx, cz);
+    const chunk = this.getWorld().get_chunk_fluids(cx, cz);
+    if (!chunk) return 0;
+    const lx = ((wx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const lz = ((wz % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const idx = wy * CHUNK_SIZE * CHUNK_SIZE + lz * CHUNK_SIZE + lx;
+    return chunk[idx] ?? 0;
+  }
+
+  private isFluidAtWorld(wx: number, wy: number, wz: number): boolean {
+    return this.getFluidLevelAtWorld(wx, wy, wz) > 0 || this.getBlockTypeAtWorld(wx, wy, wz) === BLOCK_TYPE.water;
   }
 
   private plantSeeds(worldX: number, worldY: number, worldZ: number) {
@@ -738,6 +764,15 @@ export class GameSession {
     this.ensureEntityPopulation(playerPos);
     changed = this.advanceCropGrowth(safeDt) || changed;
     changed = this.advanceDroppedItems(safeDt, playerPos) || changed;
+    const fluidDirtyPairs = Array.from(this.getWorld().step_fluids(FLUID_STEP_MAX_UPDATES)) as number[];
+    if (fluidDirtyPairs.length > 0) {
+      const dirtyChunks: Array<[number, number]> = [];
+      for (let index = 0; index < fluidDirtyPairs.length; index += 2) {
+        dirtyChunks.push([fluidDirtyPairs[index] ?? 0, fluidDirtyPairs[index + 1] ?? 0]);
+      }
+      this.remeshChunkCoords(dirtyChunks);
+      changed = true;
+    }
 
     const dayTickPerSecond = DAY_LENGTH_TICKS / FULL_DAY_SECONDS;
     this.stats.timeOfDay = (this.stats.timeOfDay + safeDt * dayTickPerSecond) % DAY_LENGTH_TICKS;
@@ -912,7 +947,7 @@ export class GameSession {
   private isFarmlandHydrated(worldX: number, worldY: number, worldZ: number): boolean {
     for (let dz = -2; dz <= 2; dz++) {
       for (let dx = -2; dx <= 2; dx++) {
-        if (this.getBlockTypeAtWorld(worldX + dx, worldY, worldZ + dz) === BLOCK_TYPE.water) {
+        if (this.isFluidAtWorld(worldX + dx, worldY, worldZ + dz)) {
           return true;
         }
       }
@@ -1004,7 +1039,7 @@ export class GameSession {
   private isDroppedItemSupportBlock(worldX: number, worldY: number, worldZ: number): boolean {
     if (worldY < 0) return true;
     const blockType = this.getBlockTypeAtWorld(worldX, worldY, worldZ);
-    return blockType !== BLOCK_TYPE.air && blockType !== BLOCK_TYPE.water && !isPlantBlockType(blockType);
+    return blockType !== BLOCK_TYPE.air && !this.isFluidAtWorld(worldX, worldY, worldZ) && !isPlantBlockType(blockType);
   }
 
   private setStatusMessage(message: string) {

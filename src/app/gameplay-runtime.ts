@@ -133,6 +133,7 @@ export class GameplayRuntime {
       this.options.input.keys,
       dt,
       this.options.blockCache.isSolid.bind(this.options.blockCache),
+      this.options.blockCache.sampleWater.bind(this.options.blockCache),
     );
     this.options.camera.position[0] = this.options.playerFeet[0];
     this.options.camera.position[1] = this.options.playerFeet[1] + this.options.eyeHeight;

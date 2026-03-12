@@ -1,5 +1,5 @@
 import type { GpuContext } from "./gpu";
-import type { Pipeline } from "./pipeline";
+import type { RenderPipelines } from "./pipeline";
 import { getItemRenderColor, type ItemId } from "../gameplay/items";
 import type { DroppedItemSnapshot, Vec3 } from "../worker/protocol";
 
@@ -9,10 +9,10 @@ export interface ChunkKey {
 }
 
 interface ChunkBuffer {
-  vertexBuffer: GPUBuffer;
-  vertexCount: number;
-  worldOffsetX: number;
-  worldOffsetZ: number;
+  solidVertexBuffer: GPUBuffer | null;
+  solidVertexCount: number;
+  waterVertexBuffer: GPUBuffer | null;
+  waterVertexCount: number;
 }
 
 const CHUNK_SIZE = 16;
@@ -28,7 +28,6 @@ interface DroppedItemRenderState {
 export class Scene {
   private device: GPUDevice;
   private chunks = new Map<string, ChunkBuffer>();
-  private blockDataMap = new Map<string, Uint8Array>();
   private droppedItems: DroppedItemRenderState[] = [];
   private droppedItemBuffer: GPUBuffer | null = null;
   private droppedItemBufferSize = 0;
@@ -46,38 +45,45 @@ export class Scene {
   uploadChunk(
     chunkX: number,
     chunkZ: number,
-    buffer: ArrayBuffer,
-    vertexCount: number,
+    solidBuffer: ArrayBuffer,
+    solidVertexCount: number,
+    waterBuffer: ArrayBuffer,
+    waterVertexCount: number,
   ) {
     const key = this.key(chunkX, chunkZ);
-    this.chunks.get(key)?.vertexBuffer.destroy();
+    const previous = this.chunks.get(key);
+    previous?.solidVertexBuffer?.destroy();
+    previous?.waterVertexBuffer?.destroy();
 
-    if (vertexCount === 0) {
+    const nextChunk: ChunkBuffer = {
+      solidVertexBuffer: null,
+      solidVertexCount,
+      waterVertexBuffer: null,
+      waterVertexCount,
+    };
+
+    if (solidVertexCount > 0) {
+      nextChunk.solidVertexBuffer = this.device.createBuffer({
+        size: solidBuffer.byteLength,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      });
+      this.device.queue.writeBuffer(nextChunk.solidVertexBuffer, 0, solidBuffer);
+    }
+
+    if (waterVertexCount > 0) {
+      nextChunk.waterVertexBuffer = this.device.createBuffer({
+        size: waterBuffer.byteLength,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      });
+      this.device.queue.writeBuffer(nextChunk.waterVertexBuffer, 0, waterBuffer);
+    }
+
+    if (solidVertexCount === 0 && waterVertexCount === 0) {
       this.chunks.delete(key);
       return;
     }
 
-    const vertexBuffer = this.device.createBuffer({
-      size: buffer.byteLength,
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-    });
-    this.device.queue.writeBuffer(vertexBuffer, 0, buffer);
-
-    this.chunks.set(key, {
-      vertexBuffer,
-      vertexCount,
-      worldOffsetX: chunkX * CHUNK_SIZE,
-      worldOffsetZ: chunkZ * CHUNK_SIZE,
-    });
-  }
-
-  /** Store raw block data for physics / collision queries. */
-  storeBlockData(chunkX: number, chunkZ: number, data: ArrayBuffer) {
-    this.blockDataMap.set(this.key(chunkX, chunkZ), new Uint8Array(data));
-  }
-
-  getBlockData(chunkX: number, chunkZ: number): Uint8Array | undefined {
-    return this.blockDataMap.get(this.key(chunkX, chunkZ));
+    this.chunks.set(key, nextChunk);
   }
 
   /** Remove chunks further than `radius` chunks from (playerChunkX, playerChunkZ). */
@@ -88,9 +94,9 @@ export class Scene {
         Math.abs(cx - playerChunkX) > radius ||
         Math.abs(cz - playerChunkZ) > radius
       ) {
-        chunk.vertexBuffer.destroy();
+        chunk.solidVertexBuffer?.destroy();
+        chunk.waterVertexBuffer?.destroy();
         this.chunks.delete(key);
-        this.blockDataMap.delete(key);
       }
     }
   }
@@ -116,19 +122,28 @@ export class Scene {
   }
 
   /** Encode all draw calls into an existing render pass. */
-  draw(pass: GPURenderPassEncoder, pipeline: Pipeline, nowMs: number) {
-    pass.setPipeline(pipeline.pipeline);
-    pass.setBindGroup(0, pipeline.bindGroup);
+  draw(pass: GPURenderPassEncoder, pipelines: RenderPipelines, nowMs: number) {
+    pass.setPipeline(pipelines.terrainPipeline);
+    pass.setBindGroup(0, pipelines.bindGroup);
 
     for (const chunk of this.chunks.values()) {
-      pass.setVertexBuffer(0, chunk.vertexBuffer);
-      pass.draw(chunk.vertexCount);
+      if (!chunk.solidVertexBuffer || chunk.solidVertexCount === 0) continue;
+      pass.setVertexBuffer(0, chunk.solidVertexBuffer);
+      pass.draw(chunk.solidVertexCount);
     }
 
     this.updateDroppedItemBuffer(nowMs);
     if (this.droppedItemBuffer && this.droppedItemVertexCount > 0) {
       pass.setVertexBuffer(0, this.droppedItemBuffer);
       pass.draw(this.droppedItemVertexCount);
+    }
+
+    pass.setPipeline(pipelines.waterPipeline);
+    pass.setBindGroup(0, pipelines.bindGroup);
+    for (const chunk of this.chunks.values()) {
+      if (!chunk.waterVertexBuffer || chunk.waterVertexCount === 0) continue;
+      pass.setVertexBuffer(0, chunk.waterVertexBuffer);
+      pass.draw(chunk.waterVertexCount);
     }
   }
 

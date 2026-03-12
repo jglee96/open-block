@@ -1,7 +1,7 @@
 use noise::{NoiseFn, Perlin};
 
 use crate::block::BlockType;
-use crate::chunk::{Chunk, CHUNK_HEIGHT, CHUNK_SIZE};
+use crate::chunk::{Chunk, CHUNK_HEIGHT, CHUNK_SIZE, FLUID_LEVEL_MAX};
 
 pub type HeightMap = [[usize; CHUNK_SIZE]; CHUNK_SIZE];
 pub const WATER_LEVEL: usize = 18;
@@ -40,6 +40,7 @@ pub fn fill_chunk_terrain(chunk: &mut Chunk, heights: &HeightMap) {
             if surface < WATER_LEVEL {
                 for y in (surface + 1)..=WATER_LEVEL {
                     chunk.set(lx, y, lz, BlockType::Water);
+                    chunk.set_fluid(lx, y, lz, FLUID_LEVEL_MAX);
                 }
             }
         }
