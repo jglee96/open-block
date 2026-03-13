@@ -820,6 +820,8 @@ export class GameSession {
         entity.position.x = playerPos.x + (Math.random() * 8 - 4);
         entity.position.z = playerPos.z + (Math.random() * 8 - 4);
       }
+
+      entity.position.y = this.surfaceYAt(entity.position.x, entity.position.z);
     }
 
     const hostileNear = this.entities.some((entity) => {

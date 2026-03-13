@@ -222,6 +222,7 @@ async function main() {
     },
     onEntitySnapshot: (msg) => {
       entitySnapshots = msg.entities;
+      scene.setEntities(msg.entities, performance.now());
     },
     onDroppedItemSnapshot: (msg) => {
       droppedItemSnapshots = msg.items;

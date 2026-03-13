@@ -1,7 +1,7 @@
 import type { GpuContext } from "./gpu";
 import type { RenderPipelines } from "./pipeline";
 import { getItemRenderColor, type ItemId } from "../gameplay/items";
-import type { DroppedItemSnapshot, Vec3 } from "../worker/protocol";
+import type { DroppedItemSnapshot, EntitySnapshot, Vec3 } from "../worker/protocol";
 
 export interface ChunkKey {
   x: number;
@@ -15,8 +15,16 @@ interface ChunkBuffer {
   waterVertexCount: number;
 }
 
-const CHUNK_SIZE = 16;
 const DROPPED_ITEM_INTERPOLATION_MS = 60;
+const ENTITY_INTERPOLATION_MS = 90;
+
+const PIG_BODY_COLOR: [number, number, number] = [0.94, 0.68, 0.74];
+const PIG_HEAD_COLOR: [number, number, number] = [0.98, 0.75, 0.81];
+const SHEEP_BODY_COLOR: [number, number, number] = [0.92, 0.93, 0.89];
+const SHEEP_HEAD_COLOR: [number, number, number] = [0.28, 0.24, 0.2];
+const ZOMBIE_BODY_COLOR: [number, number, number] = [0.2, 0.47, 0.82];
+const ZOMBIE_HEAD_COLOR: [number, number, number] = [0.45, 0.7, 0.36];
+const LEG_COLOR: [number, number, number] = [0.22, 0.16, 0.14];
 
 interface DroppedItemRenderState {
   snapshot: DroppedItemSnapshot;
@@ -25,9 +33,20 @@ interface DroppedItemRenderState {
   updatedAtMs: number;
 }
 
+interface EntityRenderState {
+  snapshot: EntitySnapshot;
+  fromPosition: Vec3;
+  toPosition: Vec3;
+  updatedAtMs: number;
+}
+
 export class Scene {
   private device: GPUDevice;
   private chunks = new Map<string, ChunkBuffer>();
+  private entities: EntityRenderState[] = [];
+  private entityBuffer: GPUBuffer | null = null;
+  private entityBufferSize = 0;
+  private entityVertexCount = 0;
   private droppedItems: DroppedItemRenderState[] = [];
   private droppedItemBuffer: GPUBuffer | null = null;
   private droppedItemBufferSize = 0;
@@ -105,6 +124,22 @@ export class Scene {
     return this.chunks.size;
   }
 
+  setEntities(entities: EntitySnapshot[], nowMs = performance.now()) {
+    const previousStates = new Map(this.entities.map((entity) => [entity.snapshot.id, entity] as const));
+    this.entities = entities.map((snapshot) => {
+      const previous = previousStates.get(snapshot.id);
+      const currentPosition = previous
+        ? this.interpolatePosition(previous.fromPosition, previous.toPosition, previous.updatedAtMs, nowMs, ENTITY_INTERPOLATION_MS)
+        : snapshot.position;
+      return {
+        snapshot,
+        fromPosition: currentPosition,
+        toPosition: snapshot.position,
+        updatedAtMs: nowMs,
+      };
+    });
+  }
+
   setDroppedItems(items: DroppedItemSnapshot[], nowMs = performance.now()) {
     const previousStates = new Map(this.droppedItems.map((item) => [item.snapshot.id, item] as const));
     this.droppedItems = items.map((snapshot) => {
@@ -132,6 +167,12 @@ export class Scene {
       pass.draw(chunk.solidVertexCount);
     }
 
+    this.updateEntityBuffer(nowMs);
+    if (this.entityBuffer && this.entityVertexCount > 0) {
+      pass.setVertexBuffer(0, this.entityBuffer);
+      pass.draw(this.entityVertexCount);
+    }
+
     this.updateDroppedItemBuffer(nowMs);
     if (this.droppedItemBuffer && this.droppedItemVertexCount > 0) {
       pass.setVertexBuffer(0, this.droppedItemBuffer);
@@ -145,6 +186,31 @@ export class Scene {
       pass.setVertexBuffer(0, chunk.waterVertexBuffer);
       pass.draw(chunk.waterVertexCount);
     }
+  }
+
+  private updateEntityBuffer(nowMs: number) {
+    if (this.entities.length === 0) {
+      this.entityVertexCount = 0;
+      return;
+    }
+
+    const verts: number[] = [];
+    for (const entity of this.entities) {
+      this.pushEntityVerts(verts, entity, nowMs);
+    }
+
+    this.entityVertexCount = verts.length / 9;
+    const data = new Float32Array(verts);
+    const requiredSize = data.byteLength;
+    if (!this.entityBuffer || this.entityBufferSize < requiredSize) {
+      this.entityBuffer?.destroy();
+      this.entityBuffer = this.device.createBuffer({
+        size: Math.max(requiredSize, 36 * 6 * 24),
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      });
+      this.entityBufferSize = Math.max(requiredSize, 36 * 6 * 24);
+    }
+    this.device.queue.writeBuffer(this.entityBuffer, 0, data);
   }
 
   private updateDroppedItemBuffer(nowMs: number) {
@@ -169,6 +235,22 @@ export class Scene {
       this.droppedItemBufferSize = Math.max(requiredSize, 36 * 6 * 8);
     }
     this.device.queue.writeBuffer(this.droppedItemBuffer, 0, data);
+  }
+
+  private pushEntityVerts(verts: number[], entity: EntityRenderState, nowMs: number) {
+    const position = this.interpolatePosition(entity.fromPosition, entity.toPosition, entity.updatedAtMs, nowMs, ENTITY_INTERPOLATION_MS);
+    const scale = entity.snapshot.isBaby ? 0.58 : 1;
+    switch (entity.snapshot.kind) {
+      case "pig":
+        this.pushPigVerts(verts, position, entity.snapshot.radius, entity.snapshot.halfHeight, scale);
+        break;
+      case "sheep":
+        this.pushSheepVerts(verts, position, entity.snapshot.radius, entity.snapshot.halfHeight, scale);
+        break;
+      case "zombie":
+        this.pushZombieVerts(verts, position, entity.snapshot.radius, entity.snapshot.halfHeight, scale);
+        break;
+    }
   }
 
   private pushDroppedItemVerts(verts: number[], item: DroppedItemRenderState, nowMs: number) {
@@ -208,12 +290,170 @@ export class Scene {
   }
 
   private interpolateDroppedItemPosition(item: DroppedItemRenderState, nowMs: number): Vec3 {
-    const alpha = Math.max(0, Math.min(1, (nowMs - item.updatedAtMs) / DROPPED_ITEM_INTERPOLATION_MS));
+    return this.interpolatePosition(item.fromPosition, item.toPosition, item.updatedAtMs, nowMs, DROPPED_ITEM_INTERPOLATION_MS);
+  }
+
+  private interpolatePosition(fromPosition: Vec3, toPosition: Vec3, updatedAtMs: number, nowMs: number, durationMs: number): Vec3 {
+    const alpha = Math.max(0, Math.min(1, (nowMs - updatedAtMs) / durationMs));
     return {
-      x: item.fromPosition.x + (item.toPosition.x - item.fromPosition.x) * alpha,
-      y: item.fromPosition.y + (item.toPosition.y - item.fromPosition.y) * alpha,
-      z: item.fromPosition.z + (item.toPosition.z - item.fromPosition.z) * alpha,
+      x: fromPosition.x + (toPosition.x - fromPosition.x) * alpha,
+      y: fromPosition.y + (toPosition.y - fromPosition.y) * alpha,
+      z: fromPosition.z + (toPosition.z - fromPosition.z) * alpha,
     };
+  }
+
+  private pushPigVerts(
+    verts: number[],
+    position: Vec3,
+    radius: number,
+    halfHeight: number,
+    scale: number,
+  ) {
+    const bodyHalfX = radius * 0.95 * scale;
+    const bodyHalfZ = radius * 0.72 * scale;
+    const bodyMinY = position.y + halfHeight * 0.32 * scale;
+    const bodyMaxY = bodyMinY + halfHeight * 0.62 * scale;
+    const legHalf = radius * 0.16 * scale;
+    const legHeight = bodyMinY - position.y;
+    const headHalf = radius * 0.34 * scale;
+    const headMinY = position.y + halfHeight * 0.44 * scale;
+    const headMaxY = headMinY + halfHeight * 0.42 * scale;
+    const headCenterX = position.x + radius * 1.02 * scale;
+
+    this.pushBox(verts, position.x - bodyHalfX, bodyMinY, position.z - bodyHalfZ, position.x + bodyHalfX, bodyMaxY, position.z + bodyHalfZ, PIG_BODY_COLOR);
+    this.pushBox(verts, headCenterX - headHalf, headMinY, position.z - headHalf, headCenterX + headHalf, headMaxY, position.z + headHalf, PIG_HEAD_COLOR);
+    this.pushAnimalLegs(verts, position, bodyHalfX * 0.7, bodyHalfZ * 0.7, legHalf, legHeight, LEG_COLOR);
+  }
+
+  private pushSheepVerts(
+    verts: number[],
+    position: Vec3,
+    radius: number,
+    halfHeight: number,
+    scale: number,
+  ) {
+    const bodyHalfX = radius * 1.02 * scale;
+    const bodyHalfZ = radius * 0.82 * scale;
+    const bodyMinY = position.y + halfHeight * 0.28 * scale;
+    const bodyMaxY = bodyMinY + halfHeight * 0.82 * scale;
+    const legHalf = radius * 0.14 * scale;
+    const legHeight = bodyMinY - position.y;
+    const headHalfX = radius * 0.28 * scale;
+    const headHalfZ = radius * 0.22 * scale;
+    const headMinY = position.y + halfHeight * 0.46 * scale;
+    const headMaxY = headMinY + halfHeight * 0.44 * scale;
+    const headCenterX = position.x + radius * 1.06 * scale;
+
+    this.pushBox(verts, position.x - bodyHalfX, bodyMinY, position.z - bodyHalfZ, position.x + bodyHalfX, bodyMaxY, position.z + bodyHalfZ, SHEEP_BODY_COLOR);
+    this.pushBox(verts, headCenterX - headHalfX, headMinY, position.z - headHalfZ, headCenterX + headHalfX, headMaxY, position.z + headHalfZ, SHEEP_HEAD_COLOR);
+    this.pushAnimalLegs(verts, position, bodyHalfX * 0.72, bodyHalfZ * 0.72, legHalf, legHeight, LEG_COLOR);
+  }
+
+  private pushZombieVerts(
+    verts: number[],
+    position: Vec3,
+    radius: number,
+    halfHeight: number,
+    scale: number,
+  ) {
+    const legHalfX = radius * 0.22 * scale;
+    const legHalfZ = radius * 0.2 * scale;
+    const legMaxY = position.y + halfHeight * 0.76 * scale;
+    const torsoHalfX = radius * 0.62 * scale;
+    const torsoHalfZ = radius * 0.34 * scale;
+    const torsoMinY = legMaxY;
+    const torsoMaxY = position.y + halfHeight * 1.58 * scale;
+    const armHalfX = radius * 0.18 * scale;
+    const armHalfZ = radius * 0.18 * scale;
+    const armMinY = position.y + halfHeight * 0.78 * scale;
+    const armMaxY = position.y + halfHeight * 1.44 * scale;
+    const headHalf = radius * 0.42 * scale;
+    const headMinY = torsoMaxY;
+    const headMaxY = position.y + halfHeight * 2 * scale;
+
+    this.pushBox(verts, position.x - legHalfX - radius * 0.18 * scale, position.y, position.z - legHalfZ, position.x - radius * 0.18 * scale + legHalfX, legMaxY, position.z + legHalfZ, [0.2, 0.28, 0.55]);
+    this.pushBox(verts, position.x + radius * 0.18 * scale - legHalfX, position.y, position.z - legHalfZ, position.x + radius * 0.18 * scale + legHalfX, legMaxY, position.z + legHalfZ, [0.2, 0.28, 0.55]);
+    this.pushBox(verts, position.x - torsoHalfX, torsoMinY, position.z - torsoHalfZ, position.x + torsoHalfX, torsoMaxY, position.z + torsoHalfZ, ZOMBIE_BODY_COLOR);
+    this.pushBox(verts, position.x - torsoHalfX - armHalfX * 1.6, armMinY, position.z - armHalfZ, position.x - torsoHalfX + armHalfX * 0.4, armMaxY, position.z + armHalfZ, ZOMBIE_BODY_COLOR);
+    this.pushBox(verts, position.x + torsoHalfX - armHalfX * 0.4, armMinY, position.z - armHalfZ, position.x + torsoHalfX + armHalfX * 1.6, armMaxY, position.z + armHalfZ, ZOMBIE_BODY_COLOR);
+    this.pushBox(verts, position.x - headHalf, headMinY, position.z - headHalf, position.x + headHalf, headMaxY, position.z + headHalf, ZOMBIE_HEAD_COLOR);
+  }
+
+  private pushAnimalLegs(
+    verts: number[],
+    position: Vec3,
+    offsetX: number,
+    offsetZ: number,
+    legHalf: number,
+    legHeight: number,
+    color: [number, number, number],
+  ) {
+    const legs: Array<[number, number]> = [
+      [-offsetX, -offsetZ],
+      [-offsetX, offsetZ],
+      [offsetX, -offsetZ],
+      [offsetX, offsetZ],
+    ];
+    for (const [xOffset, zOffset] of legs) {
+      this.pushBox(
+        verts,
+        position.x + xOffset - legHalf,
+        position.y,
+        position.z + zOffset - legHalf,
+        position.x + xOffset + legHalf,
+        position.y + legHeight,
+        position.z + zOffset + legHalf,
+        color,
+      );
+    }
+  }
+
+  private pushBox(
+    verts: number[],
+    minX: number,
+    minY: number,
+    minZ: number,
+    maxX: number,
+    maxY: number,
+    maxZ: number,
+    color: [number, number, number],
+  ) {
+    this.pushQuad(verts, [
+      [minX, minY, maxZ],
+      [maxX, minY, maxZ],
+      [maxX, maxY, maxZ],
+      [minX, maxY, maxZ],
+    ], [0, 0, 1], color);
+    this.pushQuad(verts, [
+      [maxX, minY, minZ],
+      [minX, minY, minZ],
+      [minX, maxY, minZ],
+      [maxX, maxY, minZ],
+    ], [0, 0, -1], color);
+    this.pushQuad(verts, [
+      [minX, minY, minZ],
+      [minX, minY, maxZ],
+      [minX, maxY, maxZ],
+      [minX, maxY, minZ],
+    ], [-1, 0, 0], color);
+    this.pushQuad(verts, [
+      [maxX, minY, maxZ],
+      [maxX, minY, minZ],
+      [maxX, maxY, minZ],
+      [maxX, maxY, maxZ],
+    ], [1, 0, 0], color);
+    this.pushQuad(verts, [
+      [minX, maxY, maxZ],
+      [maxX, maxY, maxZ],
+      [maxX, maxY, minZ],
+      [minX, maxY, minZ],
+    ], [0, 1, 0], color);
+    this.pushQuad(verts, [
+      [minX, minY, minZ],
+      [maxX, minY, minZ],
+      [maxX, minY, maxZ],
+      [minX, minY, maxZ],
+    ], [0, -1, 0], color);
   }
 
   private pushQuad(
