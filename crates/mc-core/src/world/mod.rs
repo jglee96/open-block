@@ -3,16 +3,14 @@ mod terrain;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use noise::Perlin;
-
 use crate::block::BlockType;
 use crate::chunk::{Chunk, CHUNK_HEIGHT, CHUNK_SIZE, FLUID_LEVEL_EMPTY, FLUID_LEVEL_MAX};
 use crate::mesher::Mesher;
-use terrain::{SPAWN_X, SPAWN_Z};
+use terrain::{TerrainDensitySampler, SPAWN_X, SPAWN_Z};
 
 pub struct World {
     chunks: HashMap<(i32, i32), Chunk>,
-    noise: Perlin,
+    terrain: TerrainDensitySampler,
     fluid_frontier: VecDeque<(i32, i32, i32)>,
     fluid_frontier_set: HashSet<(i32, i32, i32)>,
 }
@@ -21,7 +19,7 @@ impl World {
     pub fn new(seed: u32) -> Self {
         Self {
             chunks: HashMap::new(),
-            noise: Perlin::new(seed),
+            terrain: TerrainDensitySampler::new(seed),
             fluid_frontier: VecDeque::new(),
             fluid_frontier_set: HashSet::new(),
         }
@@ -29,10 +27,11 @@ impl World {
 
     pub fn generate_chunk(&mut self, chunk_x: i32, chunk_z: i32) -> &Chunk {
         if !self.chunks.contains_key(&(chunk_x, chunk_z)) {
-            let heights = terrain::build_height_map(&self.noise, chunk_x, chunk_z);
+            let mut columns = self.terrain.sample_chunk_columns(chunk_x, chunk_z);
             let mut chunk = Chunk::new();
-            terrain::fill_chunk_terrain(&mut chunk, &heights);
-            foliage::place_trees(&mut chunk, &heights, chunk_x, chunk_z);
+            self.terrain
+                .fill_chunk_from_density(&mut chunk, &mut columns, chunk_x, chunk_z);
+            foliage::place_trees(&mut chunk, &columns, chunk_x, chunk_z);
             self.chunks.insert((chunk_x, chunk_z), chunk);
             self.enqueue_chunk_sources(chunk_x, chunk_z);
         }
@@ -45,11 +44,15 @@ impl World {
     }
 
     pub fn surface_height_at(&self, wx: i32, wz: i32) -> usize {
-        terrain::surface_height_at(&self.noise, wx, wz)
+        self.terrain.surface_height_at(wx, wz)
     }
 
     pub fn spawn_point(&self) -> (i32, usize, i32) {
-        (SPAWN_X, self.surface_height_at(SPAWN_X, SPAWN_Z) + 1, SPAWN_Z)
+        (
+            SPAWN_X,
+            self.surface_height_at(SPAWN_X, SPAWN_Z) + 1,
+            SPAWN_Z,
+        )
     }
 
     pub fn build_chunk_mesh_neighbors(&mut self, cx: i32, cz: i32) -> Vec<f32> {
@@ -368,9 +371,11 @@ mod tests {
                             found_water |= chunk.get(x, y, z) == BlockType::Water;
                         }
                         if surface + 1 < CHUNK_HEIGHT {
-                            found_short_grass |= chunk.get(x, surface + 1, z) == BlockType::ShortGrass;
+                            found_short_grass |=
+                                chunk.get(x, surface + 1, z) == BlockType::ShortGrass;
                             let above = chunk.get(x, surface + 1, z);
-                            tree_columns += usize::from(above == BlockType::Log || above == BlockType::Leaves);
+                            tree_columns +=
+                                usize::from(above == BlockType::Log || above == BlockType::Leaves);
                         }
                     }
                 }
@@ -381,6 +386,83 @@ mod tests {
         assert!(found_water);
         assert!(found_short_grass);
         assert!(tree_columns >= 2);
+    }
+
+    #[test]
+    fn generated_chunks_are_deterministic() {
+        let mut world_a = World::new(42);
+        let mut world_b = World::new(42);
+
+        let chunk_a = world_a.generate_chunk(3, -2);
+        let chunk_b = world_b.generate_chunk(3, -2);
+
+        assert_eq!(chunk_a.blocks_raw(), chunk_b.blocks_raw());
+        assert_eq!(chunk_a.fluids_raw(), chunk_b.fluids_raw());
+    }
+
+    #[test]
+    fn sampled_surface_matches_generated_chunk_topology() {
+        let mut world = World::new(42);
+
+        for cz in 0..=1 {
+            for cx in 0..=1 {
+                world.generate_chunk(cx, cz);
+            }
+        }
+
+        for cz in 0..=1 {
+            for cx in 0..=1 {
+                let chunk = world.get_chunk(cx, cz).unwrap();
+                for z in 0..CHUNK_SIZE {
+                    for x in 0..CHUNK_SIZE {
+                        let wx = cx * CHUNK_SIZE as i32 + x as i32;
+                        let wz = cz * CHUNK_SIZE as i32 + z as i32;
+                        let sampled = world.surface_height_at(wx, wz);
+                        let actual = (1..CHUNK_HEIGHT)
+                            .rev()
+                            .find(|&y| {
+                                let block = chunk.get(x, y, z);
+                                block.is_solid()
+                                    && !matches!(block, BlockType::Log | BlockType::Leaves)
+                            })
+                            .unwrap_or(1);
+                        assert_eq!(sampled, actual);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn spawn_zone_blocks_large_cave_entrances() {
+        let mut world = World::new(42);
+
+        for cz in -1..=1 {
+            for cx in -1..=1 {
+                world.generate_chunk(cx, cz);
+            }
+        }
+
+        for cz in -1..=1 {
+            for cx in -1..=1 {
+                let chunk = world.get_chunk(cx, cz).unwrap();
+                for z in 0..CHUNK_SIZE {
+                    for x in 0..CHUNK_SIZE {
+                        let wx = cx * CHUNK_SIZE as i32 + x as i32;
+                        let wz = cz * CHUNK_SIZE as i32 + z as i32;
+                        let dist_sq = (wx - SPAWN_X).pow(2) + (wz - SPAWN_Z).pow(2);
+                        if dist_sq > 14_i32.pow(2) {
+                            continue;
+                        }
+                        let surface = world.surface_height_at(wx, wz);
+                        let min_y = surface.saturating_sub(4).max(1);
+                        for y in min_y..surface {
+                            assert_ne!(chunk.get(x, y, z), BlockType::Air);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

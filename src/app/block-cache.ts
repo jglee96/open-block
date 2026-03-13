@@ -28,6 +28,18 @@ export class BlockCache {
     this.fluids.set(chunkKey(chunkX, chunkZ), new Uint8Array(data));
   }
 
+  hasChunk(chunkX: number, chunkZ: number): boolean {
+    return this.chunks.has(chunkKey(chunkX, chunkZ));
+  }
+
+  hasChunkAt(wx: number, wz: number): boolean {
+    const bx = Math.floor(wx);
+    const bz = Math.floor(wz);
+    const cx = Math.floor(bx / CHUNK_SIZE);
+    const cz = Math.floor(bz / CHUNK_SIZE);
+    return this.hasChunk(cx, cz);
+  }
+
   getBlockTypeAt(wx: number, wy: number, wz: number): number {
     if (wy < 0 || wy >= CHUNK_HEIGHT) return BLOCK_TYPE.air;
     const bx = Math.floor(wx);

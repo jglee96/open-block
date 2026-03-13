@@ -50,18 +50,18 @@ export class GameplayRuntime {
     this.lastTime = now;
     let tickPayload: TickPayload | null = null;
 
+    if (workerReady) {
+      this.options.chunkStreaming.updateFocus(
+        this.options.camera.position[0],
+        this.options.camera.position[2],
+        this.options.chunkSize,
+      );
+      this.options.chunkStreaming.flush(this.options.chunksPerFrame);
+    }
+
     if (this.options.input.locked) {
       this.updatePlayerView();
       this.updatePlayerMovement(dt);
-
-      if (workerReady) {
-        this.options.chunkStreaming.updateFocus(
-          this.options.camera.position[0],
-          this.options.camera.position[2],
-          this.options.chunkSize,
-        );
-        this.options.chunkStreaming.flush(this.options.chunksPerFrame);
-      }
 
       this.targetHit = this.resolveTarget(entitySnapshots);
       this.updateHighlight();
@@ -127,6 +127,13 @@ export class GameplayRuntime {
   }
 
   private updatePlayerMovement(dt: number) {
+    if (!this.options.blockCache.hasChunkAt(this.options.playerFeet[0], this.options.playerFeet[2])) {
+      this.options.camera.position[0] = this.options.playerFeet[0];
+      this.options.camera.position[1] = this.options.playerFeet[1] + this.options.eyeHeight;
+      this.options.camera.position[2] = this.options.playerFeet[2];
+      return;
+    }
+
     this.options.physics.tick(
       this.options.playerFeet,
       this.options.camera.yaw,

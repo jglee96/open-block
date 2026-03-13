@@ -6,12 +6,66 @@ pub const FLOATS_PER_VERTEX: usize = 9;
 
 /// Six face directions: +X, -X, +Y, -Y, +Z, -Z
 const FACES: [([i32; 3], [f32; 3], [[f32; 3]; 4]); 6] = [
-    ([1, 0, 0], [1.0, 0.0, 0.0], [[1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [1.0, 1.0, 1.0], [1.0, 0.0, 1.0]]),
-    ([-1, 0, 0], [-1.0, 0.0, 0.0], [[0.0, 0.0, 1.0], [0.0, 1.0, 1.0], [0.0, 1.0, 0.0], [0.0, 0.0, 0.0]]),
-    ([0, 1, 0], [0.0, 1.0, 0.0], [[0.0, 1.0, 0.0], [0.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 0.0]]),
-    ([0, -1, 0], [0.0, -1.0, 0.0], [[0.0, 0.0, 1.0], [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 1.0]]),
-    ([0, 0, 1], [0.0, 0.0, 1.0], [[1.0, 0.0, 1.0], [1.0, 1.0, 1.0], [0.0, 1.0, 1.0], [0.0, 0.0, 1.0]]),
-    ([0, 0, -1], [0.0, 0.0, -1.0], [[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0], [1.0, 0.0, 0.0]]),
+    (
+        [1, 0, 0],
+        [1.0, 0.0, 0.0],
+        [
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [1.0, 1.0, 1.0],
+            [1.0, 0.0, 1.0],
+        ],
+    ),
+    (
+        [-1, 0, 0],
+        [-1.0, 0.0, 0.0],
+        [
+            [0.0, 0.0, 1.0],
+            [0.0, 1.0, 1.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0],
+        ],
+    ),
+    (
+        [0, 1, 0],
+        [0.0, 1.0, 0.0],
+        [
+            [0.0, 1.0, 0.0],
+            [0.0, 1.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [1.0, 1.0, 0.0],
+        ],
+    ),
+    (
+        [0, -1, 0],
+        [0.0, -1.0, 0.0],
+        [
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 1.0],
+        ],
+    ),
+    (
+        [0, 0, 1],
+        [0.0, 0.0, 1.0],
+        [
+            [1.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [0.0, 1.0, 1.0],
+            [0.0, 0.0, 1.0],
+        ],
+    ),
+    (
+        [0, 0, -1],
+        [0.0, 0.0, -1.0],
+        [
+            [0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+        ],
+    ),
 ];
 
 pub struct Mesher;
@@ -50,13 +104,26 @@ impl Mesher {
                         continue;
                     }
                     if Self::is_cross_plant(block) {
-                        Self::push_cross_plant(&mut verts, [wx0 + x as f32, y as f32, wz0 + z as f32], block);
+                        Self::push_cross_plant(
+                            &mut verts,
+                            [wx0 + x as f32, y as f32, wz0 + z as f32],
+                            block,
+                        );
                         continue;
                     }
                     let color = block.color();
 
                     for (dir, normal, quad) in &FACES {
-                        let neighbor = Self::neighbor_block(chunk, px, nx, pz, nz, x as i32 + dir[0], y as i32 + dir[1], z as i32 + dir[2]);
+                        let neighbor = Self::neighbor_block(
+                            chunk,
+                            px,
+                            nx,
+                            pz,
+                            nz,
+                            x as i32 + dir[0],
+                            y as i32 + dir[1],
+                            z as i32 + dir[2],
+                        );
                         let transparent = match neighbor {
                             Some(block) => !block.is_solid(),
                             None => dir[1] > 0,
@@ -66,10 +133,26 @@ impl Mesher {
                         }
 
                         let v: [[f32; 3]; 4] = [
-                            [wx0 + x as f32 + quad[0][0], y as f32 + quad[0][1], wz0 + z as f32 + quad[0][2]],
-                            [wx0 + x as f32 + quad[1][0], y as f32 + quad[1][1], wz0 + z as f32 + quad[1][2]],
-                            [wx0 + x as f32 + quad[2][0], y as f32 + quad[2][1], wz0 + z as f32 + quad[2][2]],
-                            [wx0 + x as f32 + quad[3][0], y as f32 + quad[3][1], wz0 + z as f32 + quad[3][2]],
+                            [
+                                wx0 + x as f32 + quad[0][0],
+                                y as f32 + quad[0][1],
+                                wz0 + z as f32 + quad[0][2],
+                            ],
+                            [
+                                wx0 + x as f32 + quad[1][0],
+                                y as f32 + quad[1][1],
+                                wz0 + z as f32 + quad[1][2],
+                            ],
+                            [
+                                wx0 + x as f32 + quad[2][0],
+                                y as f32 + quad[2][1],
+                                wz0 + z as f32 + quad[2][2],
+                            ],
+                            [
+                                wx0 + x as f32 + quad[3][0],
+                                y as f32 + quad[3][1],
+                                wz0 + z as f32 + quad[3][2],
+                            ],
                         ];
 
                         Self::push_quad(&mut verts, v, *normal, color);
@@ -110,16 +193,41 @@ impl Mesher {
                     let h = Self::fluid_height(level);
                     let world_origin = [wx0 + x as f32, y as f32, wz0 + z as f32];
 
-                    let above_fluid = Self::neighbor_fluid(chunk, px, nx, pz, nz, x as i32, y as i32 + 1, z as i32);
-                    let above_block = Self::neighbor_block(chunk, px, nx, pz, nz, x as i32, y as i32 + 1, z as i32);
-                    let show_top = above_fluid == FLUID_LEVEL_EMPTY && above_block.map(|candidate| !candidate.is_solid()).unwrap_or(true);
+                    let above_fluid = Self::neighbor_fluid(
+                        chunk,
+                        px,
+                        nx,
+                        pz,
+                        nz,
+                        x as i32,
+                        y as i32 + 1,
+                        z as i32,
+                    );
+                    let above_block = Self::neighbor_block(
+                        chunk,
+                        px,
+                        nx,
+                        pz,
+                        nz,
+                        x as i32,
+                        y as i32 + 1,
+                        z as i32,
+                    );
+                    let show_top = above_fluid == FLUID_LEVEL_EMPTY
+                        && above_block
+                            .map(|candidate| !candidate.is_solid())
+                            .unwrap_or(true);
                     if show_top {
                         Self::push_quad(
                             &mut verts,
                             [
                                 [world_origin[0], world_origin[1] + h, world_origin[2]],
                                 [world_origin[0], world_origin[1] + h, world_origin[2] + 1.0],
-                                [world_origin[0] + 1.0, world_origin[1] + h, world_origin[2] + 1.0],
+                                [
+                                    world_origin[0] + 1.0,
+                                    world_origin[1] + h,
+                                    world_origin[2] + 1.0,
+                                ],
                                 [world_origin[0] + 1.0, world_origin[1] + h, world_origin[2]],
                             ],
                             [0.0, 1.0, 0.0],
@@ -127,13 +235,39 @@ impl Mesher {
                         );
                     }
 
-                    for (dir, normal) in [([1, 0, 0], [1.0, 0.0, 0.0]), ([-1, 0, 0], [-1.0, 0.0, 0.0]), ([0, 0, 1], [0.0, 0.0, 1.0]), ([0, 0, -1], [0.0, 0.0, -1.0])] {
-                        let neighbor_block = Self::neighbor_block(chunk, px, nx, pz, nz, x as i32 + dir[0], y as i32 + dir[1], z as i32 + dir[2]);
-                        if neighbor_block.map(|candidate| candidate.is_solid()).unwrap_or(false) {
+                    for (dir, normal) in [
+                        ([1, 0, 0], [1.0, 0.0, 0.0]),
+                        ([-1, 0, 0], [-1.0, 0.0, 0.0]),
+                        ([0, 0, 1], [0.0, 0.0, 1.0]),
+                        ([0, 0, -1], [0.0, 0.0, -1.0]),
+                    ] {
+                        let neighbor_block = Self::neighbor_block(
+                            chunk,
+                            px,
+                            nx,
+                            pz,
+                            nz,
+                            x as i32 + dir[0],
+                            y as i32 + dir[1],
+                            z as i32 + dir[2],
+                        );
+                        if neighbor_block
+                            .map(|candidate| candidate.is_solid())
+                            .unwrap_or(false)
+                        {
                             continue;
                         }
 
-                        let neighbor_level = Self::neighbor_fluid(chunk, px, nx, pz, nz, x as i32 + dir[0], y as i32 + dir[1], z as i32 + dir[2]);
+                        let neighbor_level = Self::neighbor_fluid(
+                            chunk,
+                            px,
+                            nx,
+                            pz,
+                            nz,
+                            x as i32 + dir[0],
+                            y as i32 + dir[1],
+                            z as i32 + dir[2],
+                        );
                         let neighbor_h = Self::fluid_height(neighbor_level);
                         if neighbor_h >= h {
                             continue;
@@ -141,28 +275,68 @@ impl Mesher {
 
                         let quad = match dir {
                             [1, 0, 0] => [
-                                [world_origin[0] + 1.0, world_origin[1] + neighbor_h, world_origin[2]],
+                                [
+                                    world_origin[0] + 1.0,
+                                    world_origin[1] + neighbor_h,
+                                    world_origin[2],
+                                ],
                                 [world_origin[0] + 1.0, world_origin[1] + h, world_origin[2]],
-                                [world_origin[0] + 1.0, world_origin[1] + h, world_origin[2] + 1.0],
-                                [world_origin[0] + 1.0, world_origin[1] + neighbor_h, world_origin[2] + 1.0],
+                                [
+                                    world_origin[0] + 1.0,
+                                    world_origin[1] + h,
+                                    world_origin[2] + 1.0,
+                                ],
+                                [
+                                    world_origin[0] + 1.0,
+                                    world_origin[1] + neighbor_h,
+                                    world_origin[2] + 1.0,
+                                ],
                             ],
                             [-1, 0, 0] => [
-                                [world_origin[0], world_origin[1] + neighbor_h, world_origin[2] + 1.0],
+                                [
+                                    world_origin[0],
+                                    world_origin[1] + neighbor_h,
+                                    world_origin[2] + 1.0,
+                                ],
                                 [world_origin[0], world_origin[1] + h, world_origin[2] + 1.0],
                                 [world_origin[0], world_origin[1] + h, world_origin[2]],
-                                [world_origin[0], world_origin[1] + neighbor_h, world_origin[2]],
+                                [
+                                    world_origin[0],
+                                    world_origin[1] + neighbor_h,
+                                    world_origin[2],
+                                ],
                             ],
                             [0, 0, 1] => [
-                                [world_origin[0] + 1.0, world_origin[1] + neighbor_h, world_origin[2] + 1.0],
-                                [world_origin[0] + 1.0, world_origin[1] + h, world_origin[2] + 1.0],
+                                [
+                                    world_origin[0] + 1.0,
+                                    world_origin[1] + neighbor_h,
+                                    world_origin[2] + 1.0,
+                                ],
+                                [
+                                    world_origin[0] + 1.0,
+                                    world_origin[1] + h,
+                                    world_origin[2] + 1.0,
+                                ],
                                 [world_origin[0], world_origin[1] + h, world_origin[2] + 1.0],
-                                [world_origin[0], world_origin[1] + neighbor_h, world_origin[2] + 1.0],
+                                [
+                                    world_origin[0],
+                                    world_origin[1] + neighbor_h,
+                                    world_origin[2] + 1.0,
+                                ],
                             ],
                             _ => [
-                                [world_origin[0], world_origin[1] + neighbor_h, world_origin[2]],
+                                [
+                                    world_origin[0],
+                                    world_origin[1] + neighbor_h,
+                                    world_origin[2],
+                                ],
                                 [world_origin[0], world_origin[1] + h, world_origin[2]],
                                 [world_origin[0] + 1.0, world_origin[1] + h, world_origin[2]],
-                                [world_origin[0] + 1.0, world_origin[1] + neighbor_h, world_origin[2]],
+                                [
+                                    world_origin[0] + 1.0,
+                                    world_origin[1] + neighbor_h,
+                                    world_origin[2],
+                                ],
                             ],
                         };
                         Self::push_quad(&mut verts, quad, normal, color);
@@ -204,7 +378,9 @@ impl Mesher {
                         {
                             true
                         } else {
-                            !chunk.get(nbx as usize, nby as usize, nbz as usize).is_solid()
+                            !chunk
+                                .get(nbx as usize, nby as usize, nbz as usize)
+                                .is_solid()
                         };
 
                         if !neighbour_transparent {
@@ -212,10 +388,26 @@ impl Mesher {
                         }
 
                         let v: [[f32; 3]; 4] = [
-                            [x as f32 + quad[0][0], y as f32 + quad[0][1], z as f32 + quad[0][2]],
-                            [x as f32 + quad[1][0], y as f32 + quad[1][1], z as f32 + quad[1][2]],
-                            [x as f32 + quad[2][0], y as f32 + quad[2][1], z as f32 + quad[2][2]],
-                            [x as f32 + quad[3][0], y as f32 + quad[3][1], z as f32 + quad[3][2]],
+                            [
+                                x as f32 + quad[0][0],
+                                y as f32 + quad[0][1],
+                                z as f32 + quad[0][2],
+                            ],
+                            [
+                                x as f32 + quad[1][0],
+                                y as f32 + quad[1][1],
+                                z as f32 + quad[1][2],
+                            ],
+                            [
+                                x as f32 + quad[2][0],
+                                y as f32 + quad[2][1],
+                                z as f32 + quad[2][2],
+                            ],
+                            [
+                                x as f32 + quad[3][0],
+                                y as f32 + quad[3][1],
+                                z as f32 + quad[3][2],
+                            ],
                         ];
                         Self::push_quad(&mut verts, v, *normal, color);
                     }
@@ -283,16 +475,24 @@ impl Mesher {
             return FLUID_LEVEL_EMPTY;
         }
         if nbx < 0 {
-            return nx.map(|chunk| chunk.get_fluid(CHUNK_SIZE - 1, nby as usize, nbz as usize)).unwrap_or(FLUID_LEVEL_EMPTY);
+            return nx
+                .map(|chunk| chunk.get_fluid(CHUNK_SIZE - 1, nby as usize, nbz as usize))
+                .unwrap_or(FLUID_LEVEL_EMPTY);
         }
         if nbx >= CHUNK_SIZE as i32 {
-            return px.map(|chunk| chunk.get_fluid(0, nby as usize, nbz as usize)).unwrap_or(FLUID_LEVEL_EMPTY);
+            return px
+                .map(|chunk| chunk.get_fluid(0, nby as usize, nbz as usize))
+                .unwrap_or(FLUID_LEVEL_EMPTY);
         }
         if nbz < 0 {
-            return nz.map(|chunk| chunk.get_fluid(nbx as usize, nby as usize, CHUNK_SIZE - 1)).unwrap_or(FLUID_LEVEL_EMPTY);
+            return nz
+                .map(|chunk| chunk.get_fluid(nbx as usize, nby as usize, CHUNK_SIZE - 1))
+                .unwrap_or(FLUID_LEVEL_EMPTY);
         }
         if nbz >= CHUNK_SIZE as i32 {
-            return pz.map(|chunk| chunk.get_fluid(nbx as usize, nby as usize, 0)).unwrap_or(FLUID_LEVEL_EMPTY);
+            return pz
+                .map(|chunk| chunk.get_fluid(nbx as usize, nby as usize, 0))
+                .unwrap_or(FLUID_LEVEL_EMPTY);
         }
         chunk.get_fluid(nbx as usize, nby as usize, nbz as usize)
     }
@@ -383,7 +583,12 @@ impl Mesher {
         for (quad, normal) in planes {
             Self::push_quad(verts, quad, normal, color);
             let back_normal = [-normal[0], -normal[1], -normal[2]];
-            Self::push_quad(verts, [quad[2], quad[1], quad[0], quad[3]], back_normal, color);
+            Self::push_quad(
+                verts,
+                [quad[2], quad[1], quad[0], quad[3]],
+                back_normal,
+                color,
+            );
         }
     }
 }
@@ -417,10 +622,12 @@ mod tests {
 
         let mut solid_nx = Chunk::new();
         solid_nx.set(CHUNK_SIZE - 1, 8, 8, BlockType::Stone);
-        let mesh_solid = Mesher::build_mesh_with_neighbors(&chunk, None, Some(&solid_nx), None, None, 0, 0);
+        let mesh_solid =
+            Mesher::build_mesh_with_neighbors(&chunk, None, Some(&solid_nx), None, None, 0, 0);
 
         let air_nx = Chunk::new();
-        let mesh_air = Mesher::build_mesh_with_neighbors(&chunk, None, Some(&air_nx), None, None, 0, 0);
+        let mesh_air =
+            Mesher::build_mesh_with_neighbors(&chunk, None, Some(&air_nx), None, None, 0, 0);
 
         assert!(mesh_air.len() > mesh_solid.len());
         assert_eq!(mesh_air.len() - mesh_solid.len(), 6 * FLOATS_PER_VERTEX);

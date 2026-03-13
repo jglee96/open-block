@@ -4,11 +4,11 @@ mod mesher;
 mod utils;
 mod world;
 
-use wasm_bindgen::prelude::*;
 use js_sys::{Float32Array, Int32Array};
+use wasm_bindgen::prelude::*;
 
 pub use block::BlockType;
-pub use chunk::{Chunk, CHUNK_SIZE, CHUNK_HEIGHT};
+pub use chunk::{Chunk, CHUNK_HEIGHT, CHUNK_SIZE};
 pub use mesher::Mesher;
 pub use world::World;
 

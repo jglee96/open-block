@@ -574,6 +574,94 @@ Status values: `Done`, `Partial`, `Missing`, `Deferred`.
 2. Add breeding or another non-crop renewable food loop.
 3. Remove legacy `SET_BLOCK` and `COLLECT_ITEM` protocol paths if they are no longer necessary.
 
+## [2026-03-14 00:44 KST] Density Terrain Rewrite Pass
+### Goal
+- Replace the old stacked-Perlin heightmap terrain with a density-based terrain sampler that yields more natural plains, valleys, mountains, and limited 3D terrain features without changing the public world API.
+
+### Completed
+- Rebuilt Rust world generation around `TerrainDensitySampler`, `MacroRegionSample`, and `ColumnSurfaceSample`, using low-frequency region control maps plus 3D density terms for cliffs and cave carving.
+- Replaced heightmap filling with density-driven chunk generation, surface painting, shoreline classification, spawn lowland overrides, and density-based `surface_height_at` lookup.
+- Updated foliage placement to use resolved surface samples so trees and short grass prefer flatter plains/hills and avoid steep faces or water edges.
+- Added regression coverage for deterministic generation, macro-region distribution, spawn cave suppression, density feature presence, and generated surface lookup consistency.
+
+### Changed Files
+- `crates/mc-core/src/world/terrain.rs`
+- `crates/mc-core/src/world/foliage.rs`
+- `crates/mc-core/src/world/mod.rs`
+
+### Verification
+- Command: `cargo test`
+- Result: passed (22 tests)
+- Command: `npm run wasm`
+- Result: passed
+- Command: `npm run build`
+- Result: passed
+
+### Risks / Known Issues
+- The new density sampler is intentionally simplified, so valleys behave more like controlled lowland corridors than fully simulated river basins.
+- Overhangs and caves are limited by the current `CHUNK_HEIGHT` of 64, which constrains the scale of dramatic vertical terrain.
+- Surface shaping is parameter-tuned rather than tool-driven, so future gameplay tuning may still need iteration on noise frequencies and thresholds.
+
+### Next Actions
+1. Add lightweight debug tooling or screenshots for macro-region masks and density slices so terrain tuning is easier than editing constants blind.
+2. Introduce authored river/stream routing on top of the current valley corridors to make water placement read less like flooded depressions.
+3. Evaluate whether `CHUNK_HEIGHT` should increase once the new density pipeline is stable enough to support taller mountain silhouettes.
+
+## [2026-03-14 00:49 KST] Spawn Safety Fix
+### Goal
+- Prevent the player from spawning inside terrain after the density terrain rewrite.
+
+### Completed
+- Replaced the worker spawn calculation with a safe spawn search that checks nearby candidate columns around the campsite instead of trusting `surface_height_at + 1`.
+- Added footprint and headroom validation so the chosen spawn has solid support below and empty, non-fluid space through the full player capsule.
+- Kept the fallback spawn near the campsite if no nearby fully safe column is found.
+
+### Changed Files
+- `src/worker/game-session.ts`
+
+### Verification
+- Command: `npm run build`
+- Result: passed
+- Command: `npm run wasm`
+- Result: passed
+
+### Risks / Known Issues
+- The spawn search is intentionally local to preserve the campsite feel, so an extreme future terrain change could still force the fallback position higher than ideal.
+- Respawn safety uses block/fluid occupancy checks only and does not yet account for nearby hostile entities or scripted structures.
+
+### Next Actions
+1. Add an e2e assertion that initial spawn has headroom and allows immediate movement.
+2. Consider reusing the same safe-position search for entity rehoming when terrain around the player changes sharply.
+3. If save data later starts storing player position again, validate loaded positions with the same safety check before applying them.
+
+## [2026-03-14 00:58 KST] Movement Unblock After Spawn
+### Goal
+- Fix the post-spawn movement lockup where the player fell into terrain before chunk collision data was available.
+
+### Completed
+- Moved chunk streaming focus/update work so chunk requests flush whenever the worker is ready, not only while pointer lock is active.
+- Added `BlockCache` chunk-presence queries and gated player physics until the current chunk's collision data is loaded, preventing the client from free-falling through unloaded ground on the first control frame.
+- Reproduced and verified the fix in browser E2E mode by confirming the player stayed at feet `y=20` and moved forward after control began.
+
+### Changed Files
+- `src/app/block-cache.ts`
+- `src/app/gameplay-runtime.ts`
+
+### Verification
+- Command: `npm run build`
+- Result: passed
+- Manual: Playwright E2E-mode browser check
+- Result: reproduced stuck movement before the fix, then confirmed forward movement after the fix (`z: 8.5 -> 6.30`) without sinking into terrain
+
+### Risks / Known Issues
+- Old saved world state still loads entities and progression from the pre-rewrite terrain, so animals can appear far above the new ground until the save is cleared or migrated.
+- Physics currently waits for the current chunk only; very fast edge-case movement toward an unloaded neighbor chunk could still feel sticky at chunk borders.
+
+### Next Actions
+1. Add an automated e2e test that asserts control works immediately after spawn.
+2. Decide whether old saves should be invalidated or migrated now that terrain generation changed substantially.
+3. Consider prewarming adjacent chunks around spawn so first-look interaction feels instant even on slower machines.
+
 ## Entry Template (copy for each session)
 
 ```md

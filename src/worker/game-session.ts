@@ -36,6 +36,8 @@ const DROPPED_ITEM_MAX_FALL_SPEED = 14;
 const DEFAULT_SPAWN_X = 8.5;
 const DEFAULT_SPAWN_Z = 8.5;
 const FLUID_STEP_MAX_UPDATES = 512;
+const PLAYER_HALF_WIDTH = 0.3;
+const PLAYER_HEIGHT = 1.8;
 
 interface EntityRuntime extends EntitySnapshot {
   vx: number;
@@ -1130,12 +1132,71 @@ export class GameSession {
 
   private getSpawnPosition(): Vec3 {
     const world = this.getWorld() as WasmWorld & { surface_height_at: (wx: number, wz: number) => number };
-    const surfaceY = world.surface_height_at(Math.floor(DEFAULT_SPAWN_X), Math.floor(DEFAULT_SPAWN_Z));
-    return { x: DEFAULT_SPAWN_X, y: surfaceY + 1, z: DEFAULT_SPAWN_Z };
+    const originX = Math.floor(DEFAULT_SPAWN_X);
+    const originZ = Math.floor(DEFAULT_SPAWN_Z);
+
+    for (let radius = 0; radius <= 4; radius++) {
+      for (let dz = -radius; dz <= radius; dz++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dz)) !== radius) continue;
+          const blockX = originX + dx;
+          const blockZ = originZ + dz;
+          const feetX = blockX + 0.5;
+          const feetZ = blockZ + 0.5;
+          const surfaceY = world.surface_height_at(blockX, blockZ);
+
+          for (let feetY = surfaceY + 1; feetY <= Math.min(surfaceY + 4, CHUNK_HEIGHT - 2); feetY++) {
+            if (this.isSafePlayerSpawn(feetX, feetY, feetZ)) {
+              return { x: feetX, y: feetY, z: feetZ };
+            }
+          }
+        }
+      }
+    }
+
+    const fallbackY = world.surface_height_at(originX, originZ) + 2;
+    return { x: DEFAULT_SPAWN_X, y: fallbackY, z: DEFAULT_SPAWN_Z };
   }
 
   private surfaceYAt(worldX: number, worldZ: number): number {
     const world = this.getWorld() as WasmWorld & { surface_height_at: (wx: number, wz: number) => number };
     return world.surface_height_at(Math.floor(worldX), Math.floor(worldZ)) + 1;
+  }
+
+  private isSafePlayerSpawn(feetX: number, feetY: number, feetZ: number): boolean {
+    const centerX = Math.floor(feetX);
+    const centerZ = Math.floor(feetZ);
+    const supportBlock = this.getBlockTypeAtWorld(centerX, feetY - 1, centerZ);
+    if (!this.isSpawnSupportBlock(supportBlock) || this.getFluidLevelAtWorld(centerX, feetY - 1, centerZ) > 0) {
+      return false;
+    }
+
+    const minX = Math.floor(feetX - PLAYER_HALF_WIDTH);
+    const maxX = Math.floor(feetX + PLAYER_HALF_WIDTH);
+    const minY = Math.floor(feetY);
+    const maxY = Math.floor(feetY + PLAYER_HEIGHT - 0.001);
+    const minZ = Math.floor(feetZ - PLAYER_HALF_WIDTH);
+    const maxZ = Math.floor(feetZ + PLAYER_HALF_WIDTH);
+
+    for (let y = minY; y <= maxY; y++) {
+      for (let z = minZ; z <= maxZ; z++) {
+        for (let x = minX; x <= maxX; x++) {
+          const blockType = this.getBlockTypeAtWorld(x, y, z);
+          if (blockType !== BLOCK_TYPE.air || this.getFluidLevelAtWorld(x, y, z) > 0) {
+            return false;
+          }
+        }
+      }
+    }
+
+    return true;
+  }
+
+  private isSpawnSupportBlock(blockType: number): boolean {
+    return blockType !== BLOCK_TYPE.air
+      && blockType !== BLOCK_TYPE.water
+      && blockType !== BLOCK_TYPE.leaves
+      && blockType !== BLOCK_TYPE.shortGrass
+      && !isCropBlockType(blockType);
   }
 }
